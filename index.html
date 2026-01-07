@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>BrickBuilder 3D - XR Edition</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Babel for in-browser JSX compilation -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- Import Map: STRICT STABLE VERSIONS to prevent "reading 'S'" errors -->
+    <script type="importmap">
+    {
+        "imports": {
+            "react": "https://esm.sh/react@18.2.0",
+            "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+            "react-dom": "https://esm.sh/react-dom@18.2.0",
+            "three": "https://esm.sh/three@0.160.0",
+            "@react-three/fiber": "https://esm.sh/@react-three/fiber@8.15.16?external=react,react-dom,three",
+            "@react-three/drei": "https://esm.sh/@react-three/drei@9.99.0?external=react,react-dom,three,@react-three/fiber",
+            "@react-three/xr": "https://esm.sh/@react-three/xr@5.7.1?external=react,react-dom,three,@react-three/fiber",
+            "lucide-react": "https://esm.sh/lucide-react@0.309.0?external=react",
+            "uuid": "https://esm.sh/uuid@9.0.1"
+        }
+    }
+    </script>
+
+    <style>
+        body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background-color: #0f172a; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        canvas { touch-action: none; outline: none; }
+        
+        #loader {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: #0f172a; display: flex; flex-direction: column;
+            justify-content: center; align-items: center; color: white;
+            z-index: 9999; transition: opacity 0.5s ease; font-family: sans-serif;
+        }
+        .spinner {
+            width: 50px; height: 50px; border: 5px solid rgba(255,255,255,0.1);
+            border-left-color: #3b82f6; border-radius: 50%;
+            animation: spin 1s linear infinite; margin-bottom: 20px;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        
+        #error-log {
+            display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            padding: 40px; background: rgba(15, 23, 42, 0.95); color: #f87171;
+            z-index: 10000; font-family: monospace; white-space: pre-wrap; overflow: auto;
+        }
+    </style>
+</head>
+<body>
+    <div id="loader">
+        <div class="spinner"></div>
+        <div id="loader-text" class="text-xl font-bold">Restoring LEGO Engine...</div>
+        <div id="timeout-msg" style="display:none; margin-top:20px; color:#94a3b8; text-align:center;">
+            Taking longer than expected...<br>
+            <button onclick="window.location.reload()" class="mt-4 px-4 py-2 bg-blue-600 rounded-lg hover:bg-blue-500">Reload</button>
+        </div>
+    </div>
+    <div id="error-log"></div>
+    <div id="root"></div>
+
+    <script>
+        const timeoutTimer = setTimeout(() => {
+            const msg = document.getElementById('timeout-msg');
+            if (msg) msg.style.display = 'block';
+        }, 5000);
+
+        window.onerror = function(msg, url, line, col, error) {
+            clearTimeout(timeoutTimer);
+            const errorDiv = document.getElementById('error-log');
+            const loader = document.getElementById('loader');
+            if (loader) loader.style.display = 'none';
+            if (errorDiv) {
+                errorDiv.style.display = 'block';
+                errorDiv.innerHTML = `<h2 class="text-2xl font-bold mb-4">Startup Error</h2><div class="bg-black/50 p-4 rounded border border-red-900"><strong>${msg}</strong><br><small>${url}:${line}</small></div>`;
+            }
+            return false;
+        };
+    </script>
+
+    <script type="text/babel" data-type="module">
+        import React, { useState, useEffect, Suspense, useRef } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import { Canvas, useThree, useFrame } from '@react-three/fiber';
+        import { OrbitControls, RoundedBox, Environment, Html } from '@react-three/drei';
+        import { XR, Controllers, Hands, VRButton, useXR } from '@react-three/xr';
+        import * as THREE from 'three';
+        import { 
+            Undo2, Redo2, Trash2, RotateCw, Save, Download, Upload,
+            Grid3X3, Box, Sun, Moon, Glasses, Camera, Volume2, VolumeX
+        } from 'lucide-react';
+
+        const GRID_SIZE = 20;
+        const generateId = () => (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : Math.random().toString(36).substring(2);
+
+        // --- Audio Logic ---
+        const playSound = (type) => {
+            try {
+                const AudioContext = window.AudioContext || window.webkitAudioContext;
+                if (!AudioContext) return;
+                const ctx = new AudioContext();
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                const now = ctx.currentTime;
+                
+                if (type === 'snap') {
+                    // Click sound
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(800, now);
+                    osc.frequency.exponentialRampToValueAtTime(1200, now + 0.05);
+                    gain.gain.setValueAtTime(0.1, now);
+                    gain.gain.exponentialRampToValueAtTime(0.01, now + 0.05);
+                    osc.start(now); osc.stop(now + 0.05);
+                } else if (type === 'delete') {
+                    // Pop sound
+                    osc.type = 'triangle';
+                    osc.frequency.setValueAtTime(300, now);
+                    osc.frequency.linearRampToValueAtTime(100, now + 0.1);
+                    gain.gain.setValueAtTime(0.1, now);
+                    gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
+                    osc.start(now); osc.stop(now + 0.1);
+                }
+            } catch(e) {}
+        };
+
+        const PALETTE = [
+            { name: 'Red', hex: '#ef4444' }, { name: 'Blue', hex: '#3b82f6' },
+            { name: 'Yellow', hex: '#eab308' }, { name: 'Green', hex: '#22c55e' },
+            { name: 'White', hex: '#f8fafc' }, { name: 'Grey', hex: '#475569' },
+            { name: 'Black', hex: '#0f172a' }, { name: 'Pink', hex: '#db2777' },
+            { name: 'Orange', hex: '#f97316' }, { name: 'Purple', hex: '#a855f7' },
+            { name: 'Brown', hex: '#78350f' }, { name: 'Sky', hex: '#bae6fd' }
+        ];
+
+        const PlasticMaterial = ({ color, hover = false }) => (
+            <meshPhysicalMaterial
+                color={color} roughness={0.2} metalness={0.0}
+                clearcoat={0.5} clearcoatRoughness={0.1} ior={1.5}
+                transparent={hover} opacity={hover ? 0.6 : 1}
+            />
+        );
+
+        const Brick = ({ position, rotation, color, onClick, onPointerMove, transparent = false }) => (
+            <group position={position} rotation={[0, rotation, 0]}>
+                <RoundedBox 
+                    args={[1, 1, 1]} radius={0.05} smoothness={4} position={[0, 0.5, 0]} 
+                    castShadow receiveShadow
+                    onPointerDown={(e) => { if(onClick) { e.stopPropagation(); onClick(e); } }}
+                    onPointerMove={(e) => { if(onPointerMove) { e.stopPropagation(); onPointerMove(e); } }}
+                >
+                    <PlasticMaterial color={color} hover={transparent} />
+                </RoundedBox>
+                <mesh position={[0, 1.1, 0]} castShadow receiveShadow>
+                    <cylinderGeometry args={[0.35, 0.35, 0.2, 24]} />
+                    <PlasticMaterial color={color} hover={transparent} />
+                </mesh>
+            </group>
+        );
+
+        // --- VR Dashboard UI ---
+        const VRDashboard = ({ activeColor, setActiveColor, mode, setMode, setRotation, undo, saveBuild }) => {
+            const [savedText, setSavedText] = useState("SAVE");
+
+            const handleSave = () => {
+                saveBuild();
+                setSavedText("SAVED!");
+                setTimeout(() => setSavedText("SAVE"), 2000);
+            };
+
+            return (
+                <Html transform position={[0, 2.5, -2]} scale={0.5} rotation={[0.2, 0, 0]}>
+                    <div className="bg-slate-900/90 p-6 rounded-3xl border-2 border-slate-600 w-[600px] flex flex-col gap-4 shadow-2xl backdrop-blur-xl text-white select-none">
+                        <div className="flex justify-between items-center border-b border-slate-700 pb-2">
+                            <h2 className="text-2xl font-bold flex items-center gap-2">
+                                <Glasses size={24} /> VR Builder
+                            </h2>
+                            <div className="text-xs text-slate-400">Meta Quest Optimized</div>
+                        </div>
+
+                        {/* Tools */}
+                        <div className="flex gap-4 justify-center">
+                            <button 
+                                onClick={() => setMode(mode === 'build' ? 'delete' : 'build')}
+                                className={`flex-1 py-4 rounded-xl font-bold text-xl flex flex-col items-center gap-2 transition-colors ${mode === 'build' ? 'bg-blue-600' : 'bg-red-600'}`}
+                            >
+                                {mode === 'build' ? <Box size={28}/> : <Trash2 size={28}/>}
+                                {mode === 'build' ? 'BUILD' : 'DELETE'}
+                            </button>
+                            <button onClick={() => setRotation(r => r + Math.PI/2)} className="flex-1 bg-slate-700 py-4 rounded-xl flex flex-col items-center gap-2 active:bg-slate-600">
+                                <RotateCw size={28}/> ROTATE
+                            </button>
+                            <button onClick={undo} className="flex-1 bg-slate-700 py-4 rounded-xl flex flex-col items-center gap-2 active:bg-slate-600">
+                                <Undo2 size={28}/> UNDO
+                            </button>
+                            <button onClick={handleSave} className="flex-1 bg-emerald-700 py-4 rounded-xl flex flex-col items-center gap-2 active:bg-emerald-600">
+                                <Save size={28}/> {savedText}
+                            </button>
+                        </div>
+                        
+                        {/* Colors */}
+                        <div className="grid grid-cols-6 gap-3 mt-2">
+                            {PALETTE.map(c => (
+                                <button
+                                    key={c.hex}
+                                    onClick={() => setActiveColor(c.hex)}
+                                    className={`h-12 rounded-xl border-4 transition-all ${activeColor === c.hex ? 'border-white scale-105' : 'border-transparent hover:scale-105'}`}
+                                    style={{ backgroundColor: c.hex }}
+                                />
+                            ))}
+                        </div>
+                    </div>
+                </Html>
+            );
+        };
+
+        const SceneContent = ({ 
+            bricks, hoverPos, activeColor, rotation,
+            addBrick, removeBrick, setHoverPos,
+            mode, showGrid, isDark, setMode, setRotation, undo, saveBuild,
+            soundEnabled, screenshotTrigger, onScreenshotTaken
+        }) => {
+            const { isPresenting } = useXR(); 
+            const { gl, scene, camera } = useThree();
+
+            // Handle Screenshot
+            useEffect(() => {
+                if (screenshotTrigger) {
+                    gl.render(scene, camera);
+                    const dataUrl = gl.domElement.toDataURL('image/png');
+                    const link = document.createElement('a');
+                    link.setAttribute('download', 'my-lego-build.png');
+                    link.setAttribute('href', dataUrl);
+                    link.click();
+                    onScreenshotTaken();
+                }
+            }, [screenshotTrigger, gl, scene, camera, onScreenshotTaken]);
+            
+            const handlePointerMove = (e) => {
+                e.stopPropagation();
+                if (mode === 'delete') { setHoverPos(null); return; }
+                const pt = e.point;
+                let pos = [0, 0, 0];
+                if (e.object.geometry.type === 'PlaneGeometry') {
+                    pos = [Math.round(pt.x), 0, Math.round(pt.z)];
+                } else {
+                    const n = e.face.normal;
+                    pos = [Math.round(pt.x + n.x * 0.5), Math.floor(pt.y + n.y * 0.5), Math.round(pt.z + n.z * 0.5)];
+                    if (pos[1] < 0) pos[1] = 0;
+                }
+                setHoverPos(prev => (!prev || prev[0]!==pos[0] || prev[1]!==pos[1] || prev[2]!==pos[2]) ? pos : prev);
+            };
+
+            const handleClick = (e) => {
+                e.stopPropagation();
+                if (mode === 'delete') return;
+                if (hoverPos) {
+                    const exists = bricks.some(b => b.position[0]===hoverPos[0] && b.position[1]===hoverPos[1] && b.position[2]===hoverPos[2]);
+                    if (!exists) addBrick({ position: hoverPos, color: activeColor, rotation: rotation });
+                }
+            };
+
+            const boardPosition = isPresenting ? [0, 0.8, -1.5] : [0, 0, 0];
+            const boardScale = isPresenting ? 0.3 : 1; 
+
+            return (
+                <>
+                    <ambientLight intensity={isDark ? 0.3 : 0.7} />
+                    <directionalLight position={[10, 20, 10]} intensity={isDark ? 0.8 : 1.5} castShadow shadow-mapSize={[1024, 1024]}>
+                        <orthographicCamera attach="shadow-camera" args={[-20, 20, 20, -20]} />
+                    </directionalLight>
+                    <Environment preset={isDark ? "city" : "park"} blur={0.8} />
+
+                    <Controllers />
+                    <Hands />
+
+                    {isPresenting && (
+                        <VRDashboard 
+                            activeColor={activeColor} setActiveColor={setActiveColor}
+                            mode={mode} setMode={setMode}
+                            setRotation={setRotation} undo={undo} saveBuild={saveBuild}
+                        />
+                    )}
+
+                    <group position={boardPosition} scale={boardScale}>
+                        {bricks.map((brick) => (
+                            <Brick
+                                key={brick.id}
+                                position={brick.position}
+                                rotation={brick.rotation}
+                                color={brick.color}
+                                onClick={(e) => {
+                                    if (mode === 'delete') removeBrick(brick.id);
+                                    else { handlePointerMove(e); handleClick(e); }
+                                }}
+                                onPointerMove={handlePointerMove}
+                            />
+                        ))}
+                        
+                        {mode === 'build' && hoverPos && (
+                            <Brick position={hoverPos} rotation={rotation} color={activeColor} transparent={true} />
+                        )}
+
+                        <mesh rotation={[-Math.PI/2, 0, 0]} position={[0, -0.01, 0]} receiveShadow onPointerMove={handlePointerMove} onClick={handleClick}>
+                            <planeGeometry args={[50, 50]} />
+                            <meshStandardMaterial transparent opacity={0} />
+                        </mesh>
+                        
+                        {showGrid && (
+                            <gridHelper args={[GRID_SIZE * 2, GRID_SIZE * 2, isDark ? 0x555555 : 0x888888, isDark ? 0x222222 : 0xe5e7eb]} position={[0, 0.01, 0]} />
+                        )}
+                    </group>
+
+                    {!isPresenting && (
+                        <OrbitControls makeDefault minPolarAngle={0} maxPolarAngle={Math.PI / 2 - 0.1} dampingFactor={0.05} enableDamping />
+                    )}
+                </>
+            );
+        };
+
+        const UIButton = ({ icon: Icon, onClick, active, label, color }) => (
+            <button onClick={onClick} title={label} style={{ backgroundColor: color }}
+                className={`flex items-center justify-center p-3 rounded-xl transition-all duration-200 backdrop-blur-sm ${active ? 'bg-blue-600 text-white shadow-lg scale-105' : 'bg-white/90 text-slate-700 hover:bg-white border border-slate-200'}`}
+            >
+                {Icon ? <Icon size={22} strokeWidth={2.5} /> : <div className="w-5 h-5 rounded-full border-2 border-white/50" />}
+            </button>
+        );
+
+        function App() {
+            const [bricks, setBricks] = useState([]);
+            const [history, setHistory] = useState([[]]);
+            const [historyIndex, setHistoryIndex] = useState(0);
+            const [hoverPos, setHoverPos] = useState(null);
+            const [activeColor, setActiveColor] = useState(PALETTE[0].hex);
+            const [rotation, setRotation] = useState(0);
+            const [mode, setMode] = useState('build');
+            const [showGrid, setShowGrid] = useState(true);
+            const [isDark, setIsDark] = useState(false);
+            const [soundEnabled, setSoundEnabled] = useState(true);
+            const [screenshotTrigger, setScreenshotTrigger] = useState(false);
+            const fileInputRef = useRef(null);
+
+            useEffect(() => {
+                const loader = document.getElementById('loader');
+                if(loader) {
+                    loader.style.opacity = '0';
+                    setTimeout(() => loader.style.display = 'none', 500);
+                }
+            }, []);
+
+            const addToHistory = (newBricks) => {
+                const newHistory = history.slice(0, historyIndex + 1);
+                newHistory.push(newBricks);
+                setHistory(newHistory);
+                setHistoryIndex(newHistory.length - 1);
+            };
+            const addBrick = (d) => { 
+                const n = [...bricks, { ...d, id: generateId() }]; 
+                setBricks(n); 
+                addToHistory(n);
+                if(soundEnabled) playSound('snap');
+            };
+            const removeBrick = (id) => { 
+                const n = bricks.filter(b => b.id !== id); 
+                setBricks(n); 
+                addToHistory(n);
+                if(soundEnabled) playSound('delete');
+            };
+            const undo = () => { if (historyIndex > 0) { setHistoryIndex(historyIndex - 1); setBricks(history[historyIndex - 1]); }};
+            const redo = () => { if (historyIndex < history.length - 1) { setHistoryIndex(historyIndex + 1); setBricks(history[historyIndex + 1]); }};
+            const clearAll = () => { if (confirm('Clear?')) { setBricks([]); addToHistory([]); }};
+            
+            const saveBuild = () => { try { localStorage.setItem('lego-build', JSON.stringify(bricks)); if(!document.querySelector('canvas').xr) alert('Saved!'); } catch(e){} };
+            
+            const exportBuild = () => {
+                const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+                const a = document.createElement('a');
+                a.href = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(bricks));
+                a.download = `lego-build-${timestamp}.json`; document.body.appendChild(a); a.click(); a.remove();
+            };
+            
+            const importBuild = (e) => {
+                const f = e.target.files[0]; if(!f) return;
+                const r = new FileReader();
+                r.onload = (ev) => { try { const p = JSON.parse(ev.target.result); if(Array.isArray(p)) { setBricks(p); addToHistory(p); } } catch(err){} };
+                r.readAsText(f); e.target.value = '';
+            };
+
+            useEffect(() => {
+                const saved = localStorage.getItem('lego-build');
+                if (saved) { try { const p = JSON.parse(saved); setBricks(p); setHistory([p]); } catch (e) {} }
+            }, []);
+
+            return (
+                <div className={`w-full h-screen relative select-none touch-none overflow-hidden transition-colors duration-500 ${isDark ? 'bg-slate-900' : 'bg-blue-50'}`}>
+                    <input type="file" ref={fileInputRef} onChange={importBuild} accept=".json" style={{display: 'none'}} />
+                    
+                    <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-50 pointer-events-auto">
+                        <VRButton className="bg-black text-white px-6 py-3 rounded-full font-bold shadow-xl border-2 border-white/20 hover:scale-105 transition-transform" />
+                    </div>
+
+                    <Canvas 
+                        shadows 
+                        dpr={[1, 2]} 
+                        gl={{ preserveDrawingBuffer: true }}
+                        camera={{ position: [8, 8, 8], fov: 45 }}
+                    >
+                        <XR>
+                            <Suspense fallback={null}>
+                                <SceneContent
+                                    bricks={bricks} hoverPos={hoverPos} setHoverPos={setHoverPos}
+                                    activeColor={activeColor} rotation={rotation}
+                                    addBrick={addBrick} removeBrick={removeBrick}
+                                    mode={mode} setMode={setMode}
+                                    showGrid={showGrid} isDark={isDark}
+                                    setRotation={setRotation} undo={undo} saveBuild={saveBuild}
+                                    soundEnabled={soundEnabled}
+                                    screenshotTrigger={screenshotTrigger}
+                                    onScreenshotTaken={() => setScreenshotTrigger(false)}
+                                />
+                            </Suspense>
+                        </XR>
+                    </Canvas>
+                    
+                    <div className="absolute top-0 left-0 right-0 p-4 flex justify-between pointer-events-none z-10">
+                        <div className="flex gap-2 pointer-events-auto">
+                            <UIButton icon={mode === 'build' ? Box : Trash2} active={true} label={mode === 'build' ? 'Build Mode' : 'Delete Mode'} onClick={() => setMode(mode === 'build' ? 'delete' : 'build')} color={mode === 'delete' ? '#fca5a5' : undefined} />
+                            <UIButton icon={RotateCw} label="Rotate" onClick={() => setRotation(r => r + Math.PI/2)} />
+                        </div>
+                        <div className="flex flex-wrap justify-end gap-2 pointer-events-auto max-w-[200px] sm:max-w-none">
+                            <UIButton icon={Undo2} label="Undo" onClick={undo} />
+                            <UIButton icon={Redo2} label="Redo" onClick={redo} />
+                            <div className="hidden sm:block w-px h-8 bg-slate-300 mx-1 self-center opacity-50"></div>
+                            
+                            <UIButton icon={Camera} label="Screenshot" onClick={() => setScreenshotTrigger(true)} />
+                            <UIButton icon={soundEnabled ? Volume2 : VolumeX} label="Sound" onClick={() => setSoundEnabled(!soundEnabled)} />
+                            
+                            <div className="hidden sm:block w-px h-8 bg-slate-300 mx-1 self-center opacity-50"></div>
+
+                            <UIButton icon={Save} label="Quick Save" onClick={saveBuild} />
+                            <UIButton icon={Download} label="Export JSON" onClick={exportBuild} />
+                            <UIButton icon={Upload} label="Import JSON" onClick={() => fileInputRef.current?.click()} />
+                            
+                            <div className="hidden sm:block w-px h-8 bg-slate-300 mx-1 self-center opacity-50"></div>
+                            
+                            <UIButton icon={isDark ? Moon : Sun} label="Theme" onClick={() => setIsDark(!isDark)} />
+                            <UIButton icon={Grid3X3} active={showGrid} label="Toggle Grid" onClick={() => setShowGrid(!showGrid)} />
+                            <UIButton icon={Trash2} label="Clear All" onClick={clearAll} className="text-red-500" />
+                        </div>
+                    </div>
+
+                    <div className="absolute bottom-6 left-0 right-0 flex flex-col items-center gap-4 pointer-events-none px-4 z-10">
+                        {mode === 'build' && (
+                            <div className="pointer-events-auto bg-white/80 backdrop-blur-md p-3 rounded-2xl shadow-xl border border-white/50 flex gap-3 overflow-x-auto max-w-full no-scrollbar mb-14">
+                                {PALETTE.map(c => (
+                                    <button key={c.hex} onClick={() => setActiveColor(c.hex)} className={`flex-shrink-0 w-10 h-10 rounded-full border-4 transition-transform shadow-sm ${activeColor === c.hex ? 'border-white scale-110 shadow-md ring-2 ring-blue-400' : 'border-transparent hover:scale-105'}`} style={{ backgroundColor: c.hex }} />
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        createRoot(document.getElementById('root')).render(<App />);
+    </script>
+</body>
+</html>

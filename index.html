@@ -33,7 +33,7 @@
     <script type="text/babel" data-type="module">
         import React, { useEffect, useMemo, useRef, useState } from 'react';
         import { createRoot } from 'react-dom/client';
-        import { Canvas, useThree } from '@react-three/fiber';
+        import { Canvas, useThree, useFrame } from '@react-three/fiber';
         import { OrbitControls, RoundedBox, Environment } from '@react-three/drei';
         import * as THREE from 'three';
         import { STLExporter } from 'three/addons/exporters/STLExporter.js';
@@ -145,14 +145,19 @@
                     out.width = source.width * scale;
                     out.height = source.height * scale;
                     const ctx = out.getContext('2d');
-                    ctx.scale(scale, scale);
-                    ctx.drawImage(source, 0, 0, source.width, source.height);
+                    ctx.drawImage(source, 0, 0, out.width, out.height);
                     const link = document.createElement('a');
                     link.href = out.toDataURL('image/png');
                     link.download = 'brickbuilder-screenshot.png';
                     link.click();
                 });
             }, [gl, scene, camera]);
+
+            useFrame(() => {
+                const dir = new THREE.Vector3();
+                camera.getWorldDirection(dir);
+                app.setCameraDirection([dir.x, dir.y, dir.z]);
+            });
 
             const handlePointerMove = (e) => {
                 if (app.mode === 'delete') return app.setHover(null);
@@ -241,6 +246,7 @@
             const [selectedId, setSelectedId] = useState(null);
             const [showOnboarding, setShowOnboarding] = useState(true);
             const [physics, setPhysics] = useState({});
+            const [cameraDirection, setCameraDirection] = useState([0.15, 0.3, -0.9]);
             const screenshotRef = useRef(null);
 
             useEffect(() => {
@@ -255,7 +261,7 @@
                         }
                     } catch {}
                 }
-                const timer = setTimeout(() => setShowOnboarding(false), 6000);
+                const timer = setTimeout(() => setShowOnboarding(false), 3000);
                 return () => clearTimeout(timer);
             }, []);
 
@@ -358,7 +364,7 @@
             };
 
             const punchAll = () => {
-                const dir = new THREE.Vector3(0.15, 0.3, -0.9).normalize();
+                const dir = new THREE.Vector3(cameraDirection[0], Math.max(0.15, Math.abs(cameraDirection[1])), cameraDirection[2]).normalize();
                 setPhysics((prev) => {
                     const next = { ...prev };
                     bricks.forEach((b) => {
@@ -382,7 +388,7 @@
 
             const app = useMemo(() => ({
                 bricks, hover, setHover, mode, rotation, activeColor, activeMaterial,
-                selectedId, setSelectedId, physics, soundEnabled,
+                selectedId, setSelectedId, physics, soundEnabled, setCameraDirection,
                 commit,
                 setScreenshotExporter: (fn) => { screenshotRef.current = fn; }
             }), [bricks, hover, mode, rotation, activeColor, activeMaterial, selectedId, physics, soundEnabled]);
@@ -398,18 +404,18 @@
                             <div className="max-w-md w-full bg-white rounded-2xl p-4 sm:p-6 text-slate-800 shadow-2xl border border-slate-200">
                                 <h1 className="text-lg sm:text-xl font-bold flex items-center gap-2 mb-3"><span>{Icons.Start()}</span>Start Building</h1>
                                 <div className="grid gap-2 text-sm sm:text-base">
-                                    <p>👆 <b>Tap to place</b> bricks on the ground.</p>
-                                    <p>✋ <b>Move mode</b>: select brick, then tap new spot.</p>
-                                    <p>🔁 Use <b>Undo/Redo</b> any time.</p>
+                                    <p>👆 <b>Tap to place</b> on highlighted grid cells.</p>
+                                    <p>✋ <b>Drag to orbit</b>; pinch or scroll to zoom.</p>
+                                    <p>🧭 Pick <b>Build / Move / Delete</b> from the top toolbar.</p>
                                 </div>
-                                <button className={`mt-4 w-full ${MIN_TOUCH} rounded-xl bg-blue-600 text-white font-semibold`} onClick={() => setShowOnboarding(false)}>Got it</button>
+                                <button className={`mt-4 w-full ${MIN_TOUCH} rounded-xl bg-blue-600 text-white font-semibold`} onClick={() => setShowOnboarding(false)}>Start Building</button>
                             </div>
                         </div>
                     )}
 
                     <div className="absolute top-0 left-0 right-0 z-30 p-2 sm:p-3 pointer-events-none">
                         <div className="pointer-events-auto rounded-2xl bg-white/90 backdrop-blur-md p-2 sm:p-3 border border-slate-200">
-                            <div className="flex flex-wrap gap-2 items-center">
+                            <div className="flex gap-2 items-center overflow-x-auto safe-scroll">
                                 <UIButton label="Build" icon={Icons.Build} active={mode === 'build'} onClick={() => { setMode('build'); setSelectedId(null); }} />
                                 <UIButton label="Move" icon={Icons.Move} active={mode === 'move'} onClick={() => setMode('move')} />
                                 <UIButton label="Delete" icon={Icons.Delete} active={mode === 'delete'} onClick={() => { setMode('delete'); setSelectedId(null); }} />

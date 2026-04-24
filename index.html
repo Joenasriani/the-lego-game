@@ -30,6 +30,12 @@
         const GRID_SIZE = 24;
         const MIN_TOUCH = 'min-w-[44px] min-h-[44px]';
         const MATERIAL_TYPES = ['plastic', 'wood', 'metal'];
+        const SHAPES = [
+            { id: 'single', label: '1x1', icon: '◼︎', cells: [[0, 0]] },
+            { id: 'rect2', label: '1x2', icon: '▭', cells: [[0, 0], [1, 0]] },
+            { id: 'square2', label: '2x2', icon: '▦', cells: [[0, 0], [1, 0], [0, 1], [1, 1]] },
+            { id: 'l3', label: 'L', icon: '◫', cells: [[0, 0], [1, 0], [0, 1]] }
+        ];
         const STORAGE_KEY = 'lego-build-v2';
         const PALETTE = ['#ef4444','#3b82f6','#eab308','#22c55e','#f8fafc','#475569','#0f172a','#db2777','#f97316','#a855f7','#78350f','#bae6fd'];
         const createId = () => (crypto?.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2));
@@ -97,11 +103,36 @@
             source.stop(now + duration);
         };
 
-        const UIButton = ({ label, onClick, active, icon, disabled }) => (
+        const getShape = (shapeId) => SHAPES.find((s) => s.id === shapeId) || SHAPES[0];
+        const toQuarterTurn = (rotation = 0) => ((Math.round(rotation / (Math.PI / 2)) % 4) + 4) % 4;
+        const rotateCell = ([x, z], turns) => {
+            if (turns === 1) return [z, -x];
+            if (turns === 2) return [-x, -z];
+            if (turns === 3) return [-z, x];
+            return [x, z];
+        };
+        const getOccupiedCells = (brick, anchor = brick.position, rotation = brick.rotation) => {
+            const shape = getShape(brick.shape);
+            const turns = toQuarterTurn(rotation);
+            return shape.cells.map((cell) => {
+                const [rx, rz] = rotateCell(cell, turns);
+                return [anchor[0] + rx, anchor[1], anchor[2] + rz];
+            });
+        };
+        const collides = (existingBricks, candidate, ignoreId = null) => {
+            const occupied = new Set();
+            existingBricks.forEach((b) => {
+                if (ignoreId && b.id === ignoreId) return;
+                getOccupiedCells(b).forEach((c) => occupied.add(c.join(',')));
+            });
+            return getOccupiedCells(candidate).some((c) => occupied.has(c.join(',')));
+        };
+
+        const UIButton = ({ label, onClick, active, icon, disabled, tone = 'secondary' }) => (
             <button
                 onClick={onClick}
                 disabled={disabled}
-                className={`${MIN_TOUCH} px-3 py-2 rounded-xl text-sm font-semibold border transition ${active ? 'bg-blue-600 text-white border-blue-500' : 'bg-white/95 text-slate-700 border-slate-200'} ${disabled ? 'opacity-50 cursor-not-allowed' : 'hover:scale-[1.02]'}`}
+                className={`${MIN_TOUCH} px-3 py-2 rounded-xl text-sm font-semibold border transition-all duration-150 ${tone === 'primary' ? 'shadow-sm' : ''} ${active ? 'bg-blue-600 text-white border-blue-500 -translate-y-[1px] shadow-md' : tone === 'primary' ? 'bg-slate-100 text-slate-800 border-slate-300' : 'bg-white/95 text-slate-700 border-slate-200'} ${disabled ? 'opacity-50 cursor-not-allowed' : 'hover:-translate-y-[1px] active:translate-y-[1px]'}`}
                 title={label}
             >
                 <span className="inline-flex items-center gap-2"><span>{icon ? icon() : ''}</span>{label}</span>
@@ -113,13 +144,17 @@
             const color = new THREE.Color(brick.color).multiplyScalar(shade).getStyle();
             return (
                 <group position={[brick.position[0] + (dynamic?.offset?.x || 0), brick.position[1] + (dynamic?.offset?.y || 0), brick.position[2] + (dynamic?.offset?.z || 0)]} rotation={[dynamic?.tilt?.x || 0, brick.rotation + (dynamic?.tilt?.y || 0), dynamic?.tilt?.z || 0]}>
-                    <RoundedBox args={[1,1,1]} radius={0.05} smoothness={4} position={[0,0.5,0]} castShadow receiveShadow onPointerDown={onPointerDown} onPointerMove={onPointerMove}>
-                        <meshPhysicalMaterial color={color} roughness={0.22} clearcoat={0.45} />
-                    </RoundedBox>
-                    <mesh position={[0,1.1,0]} castShadow receiveShadow>
-                        <cylinderGeometry args={[0.35,0.35,0.2,20]} />
-                        <meshPhysicalMaterial color={color} roughness={0.24} clearcoat={0.5} />
-                    </mesh>
+                    {getShape(brick.shape).cells.map(([x, z], i) => (
+                        <group key={`${brick.id}-${i}`} position={[x, 0, z]}>
+                            <RoundedBox args={[1,1,1]} radius={0.05} smoothness={4} position={[0,0.5,0]} castShadow receiveShadow onPointerDown={onPointerDown} onPointerMove={onPointerMove}>
+                                <meshPhysicalMaterial color={color} roughness={0.22} clearcoat={0.45} />
+                            </RoundedBox>
+                            <mesh position={[0,1.1,0]} castShadow receiveShadow>
+                                <cylinderGeometry args={[0.35,0.35,0.2,20]} />
+                                <meshPhysicalMaterial color={color} roughness={0.24} clearcoat={0.5} />
+                            </mesh>
+                        </group>
+                    ))}
                 </group>
             );
         };
@@ -134,15 +169,17 @@
                 const quat = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, b.rotation || 0, 0));
                 transform.compose(position, quat, new THREE.Vector3(1, 1, 1));
 
-                const box = new THREE.BoxGeometry(1, 1, 1).toNonIndexed();
-                box.translate(0, 0.5, 0);
-                box.applyMatrix4(transform);
-                all.push(box);
+                getShape(b.shape).cells.forEach(([x, z]) => {
+                    const box = new THREE.BoxGeometry(1, 1, 1).toNonIndexed();
+                    box.translate(x, 0.5, z);
+                    box.applyMatrix4(transform);
+                    all.push(box);
 
-                const stud = new THREE.CylinderGeometry(0.35, 0.35, 0.2, 24).toNonIndexed();
-                stud.translate(0, 1.1, 0);
-                stud.applyMatrix4(transform);
-                all.push(stud);
+                    const stud = new THREE.CylinderGeometry(0.35, 0.35, 0.2, 24).toNonIndexed();
+                    stud.translate(x, 1.1, z);
+                    stud.applyMatrix4(transform);
+                    all.push(stud);
+                });
             });
             if (!all.length) return null;
             const merged = mergeGeometries(all, false);
@@ -191,16 +228,20 @@
 
             const addAtHover = () => {
                 if (!app.hover) return;
-                if (app.bricks.some((b) => b.position.every((v, i) => v === app.hover[i]))) return;
-                const next = [...app.bricks, { id: createId(), position: [...app.hover], rotation: app.rotation, color: app.activeColor, material: app.activeMaterial }];
+                const candidate = { id: createId(), position: [...app.hover], rotation: app.rotation, color: app.activeColor, material: app.activeMaterial, shape: app.activeShape };
+                if (collides(app.bricks, candidate)) return;
+                const next = [...app.bricks, candidate];
                 app.commit(next);
                 playImpactSound(app.activeMaterial, app.soundEnabled);
             };
 
             const moveSelected = () => {
                 if (!app.selectedId || !app.hover) return;
-                if (app.bricks.some((b) => b.id !== app.selectedId && b.position.every((v, i) => v === app.hover[i]))) return;
-                const next = app.bricks.map((b) => b.id === app.selectedId ? ({ ...b, position: [...app.hover] }) : b);
+                const selected = app.bricks.find((b) => b.id === app.selectedId);
+                if (!selected) return;
+                const candidate = { ...selected, position: [...app.hover] };
+                if (collides(app.bricks, candidate, app.selectedId)) return;
+                const next = app.bricks.map((b) => b.id === app.selectedId ? candidate : b);
                 app.commit(next);
                 playImpactSound('wood', app.soundEnabled);
             };
@@ -234,9 +275,11 @@
 
                     {app.mode !== 'delete' && app.hover && (
                         <group position={app.hover}>
-                            <RoundedBox args={[1,1,1]} radius={0.05} smoothness={3} position={[0,0.5,0]}>
-                                <meshStandardMaterial color={app.mode === 'move' ? '#22c55e' : app.activeColor} transparent opacity={0.35} />
-                            </RoundedBox>
+                            {(app.mode === 'move' && app.selectedId ? getShape((app.bricks.find((b) => b.id === app.selectedId) || {}).shape).cells : getShape(app.activeShape).cells).map(([x, z], i) => (
+                                <RoundedBox key={i} args={[1,1,1]} radius={0.05} smoothness={3} position={[x,0.5,z]}>
+                                    <meshStandardMaterial color={app.mode === 'move' ? '#22c55e' : app.activeColor} transparent opacity={0.35} />
+                                </RoundedBox>
+                            ))}
                         </group>
                     )}
 
@@ -258,6 +301,7 @@
             const [mode, setMode] = useState('build');
             const [rotation, setRotation] = useState(0);
             const [activeColor, setActiveColor] = useState(PALETTE[0]);
+            const [activeShape, setActiveShape] = useState(SHAPES[0].id);
             const [activeMaterial, setActiveMaterial] = useState('plastic');
             const [soundEnabled, setSoundEnabled] = useState(true);
             const [selectedId, setSelectedId] = useState(null);
@@ -406,10 +450,10 @@
 
             const app = useMemo(() => ({
                 bricks, hover, setHover, mode, rotation, activeColor, activeMaterial,
-                selectedId, setSelectedId, physics, soundEnabled, setCameraDirection,
+                selectedId, setSelectedId, physics, soundEnabled, setCameraDirection, activeShape,
                 commit,
                 setScreenshotExporter: (fn) => { screenshotRef.current = fn; }
-            }), [bricks, hover, mode, rotation, activeColor, activeMaterial, selectedId, physics, soundEnabled]);
+            }), [bricks, hover, mode, rotation, activeColor, activeMaterial, selectedId, physics, soundEnabled, activeShape]);
 
             return (
                 <div className="w-full h-screen relative overflow-hidden bg-slate-900 text-slate-900">
@@ -434,12 +478,16 @@
                     <div className="absolute top-0 left-0 right-0 z-30 p-2 sm:p-3 pointer-events-none">
                         <div className="pointer-events-auto rounded-2xl bg-white/90 backdrop-blur-md p-2 sm:p-3 border border-slate-200">
                             <div className="flex gap-2 items-center overflow-x-auto safe-scroll">
-                                <UIButton label="Build" icon={Icons.Build} active={mode === 'build'} onClick={() => { setMode('build'); setSelectedId(null); }} />
-                                <UIButton label="Move" icon={Icons.Move} active={mode === 'move'} onClick={() => setMode('move')} />
-                                <UIButton label="Delete" icon={Icons.Delete} active={mode === 'delete'} onClick={() => { setMode('delete'); setSelectedId(null); }} />
+                                <UIButton label="Build" icon={Icons.Build} tone="primary" active={mode === 'build'} onClick={() => { setMode('build'); setSelectedId(null); }} />
+                                <UIButton label="Move" icon={Icons.Move} tone="primary" active={mode === 'move'} onClick={() => setMode('move')} />
+                                <UIButton label="Delete" icon={Icons.Delete} tone="primary" active={mode === 'delete'} onClick={() => { setMode('delete'); setSelectedId(null); }} />
                                 <UIButton label="Rotate" onClick={() => {
                                     if (mode === 'move' && selectedId) {
-                                        commit(bricks.map((b) => b.id === selectedId ? ({ ...b, rotation: b.rotation + Math.PI / 2 }) : b));
+                                        const selected = bricks.find((b) => b.id === selectedId);
+                                        if (!selected) return;
+                                        const rotated = { ...selected, rotation: selected.rotation + Math.PI / 2 };
+                                        if (collides(bricks, rotated, selectedId)) return;
+                                        commit(bricks.map((b) => b.id === selectedId ? rotated : b));
                                     } else setRotation((r) => r + Math.PI / 2);
                                 }} />
                                 <UIButton label="Undo" icon={Icons.Undo} onClick={undo} disabled={historyIndex === 0} />
@@ -454,6 +502,17 @@
                             <div className="flex gap-2 overflow-x-auto safe-scroll pb-1">
                                 {PALETTE.map((c) => (
                                     <button key={c} onClick={() => setActiveColor(c)} className={`${MIN_TOUCH} w-11 h-11 rounded-full border-4 ${activeColor === c ? 'border-blue-500' : 'border-white'} shrink-0`} style={{ backgroundColor: c }} />
+                                ))}
+                            </div>
+                            <div className="flex flex-wrap gap-2 items-center text-sm">
+                                <label className="font-semibold">Shape:</label>
+                                {SHAPES.map((shape) => (
+                                    <UIButton
+                                        key={shape.id}
+                                        label={`${shape.icon} ${shape.label}`}
+                                        active={activeShape === shape.id}
+                                        onClick={() => setActiveShape(shape.id)}
+                                    />
                                 ))}
                             </div>
                             <div className="flex flex-wrap gap-2 items-center text-sm">

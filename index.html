@@ -1,510 +1,451 @@
 <!DOCTYPE html>
 <html lang="en">
-<head> a
+<head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>BrickBuilder 3D - Stable</title>
-    
-    <!-- Tailwind CSS -->
+    <title>BrickBuilder 3D</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    
-    <!-- Babel -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-
-    <!-- Import Map: Added specific mappings to fix resolution errors -->
     <script type="importmap">
     {
         "imports": {
             "react": "https://esm.sh/react@18.2.0",
             "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
-            "react-dom": "https://esm.sh/react-dom@18.2.0",
             "three": "https://esm.sh/three@0.154.0",
-            "three/src/math/MathUtils": "https://esm.sh/three@0.154.0/src/math/MathUtils",
-            "three/src/math/ColorManagement": "https://esm.sh/three@0.154.0/src/math/ColorManagement",
             "@react-three/fiber": "https://esm.sh/@react-three/fiber@8.13.0?external=react,react-dom,three",
             "@react-three/drei": "https://esm.sh/@react-three/drei@9.74.0?external=react,react-dom,three,@react-three/fiber",
-            "@react-three/xr": "https://esm.sh/@react-three/xr@5.2.0?external=react,react-dom,three,@react-three/fiber",
-            "uuid": "https://esm.sh/uuid@9.0.1"
+            "three/addons/exporters/STLExporter.js": "https://esm.sh/three@0.154.0/examples/jsm/exporters/STLExporter.js",
+            "three/addons/exporters/OBJExporter.js": "https://esm.sh/three@0.154.0/examples/jsm/exporters/OBJExporter.js",
+            "three/addons/utils/BufferGeometryUtils.js": "https://esm.sh/three@0.154.0/examples/jsm/utils/BufferGeometryUtils.js"
         }
     }
     </script>
-
     <style>
-        body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background-color: #0f172a; }
-        .no-scrollbar::-webkit-scrollbar { display: none; }
-        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
-        canvas { touch-action: none; outline: none; }
-        
-        #loader {
-            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: #0f172a; display: flex; flex-direction: column;
-            justify-content: center; align-items: center; color: white;
-            z-index: 9999; transition: opacity 0.5s ease; font-family: sans-serif;
-        }
-        .spinner {
-            width: 50px; height: 50px; border: 5px solid rgba(255,255,255,0.1);
-            border-left-color: #3b82f6; border-radius: 50%;
-            animation: spin 1s linear infinite; margin-bottom: 20px;
-        }
-        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-        
-        #error-overlay {
-            display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            padding: 40px; background: rgba(15, 23, 42, 0.95); color: #f87171;
-            z-index: 10000; font-family: monospace; white-space: pre-wrap; overflow: auto;
-        }
+        html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #0f172a; }
+        #root { width: 100%; height: 100%; }
+        canvas { touch-action: none; }
+        .safe-scroll::-webkit-scrollbar { display: none; }
     </style>
 </head>
 <body>
-    <div id="loader">
-        <div class="spinner"></div>
-        <div id="loader-text" class="text-xl font-bold">Initializing...</div>
-        <div id="timeout-msg" style="display:none; margin-top:20px; color:#94a3b8; text-align:center;">
-            Taking longer than usual...<br>
-            <button onclick="document.getElementById('loader').style.display='none'" class="mt-4 px-4 py-2 bg-blue-600 rounded-lg hover:bg-blue-500 font-bold">Force Show App</button>
-        </div>
-    </div>
-    <div id="error-overlay"></div>
     <div id="root"></div>
 
-    <script>
-        // 1. Global Error Handler
-        window.onerror = function(msg, url, line, col, error) {
-            const overlay = document.getElementById('error-overlay');
-            const loader = document.getElementById('loader');
-            if (loader) loader.style.display = 'none';
-            if (overlay) {
-                overlay.style.display = 'block';
-                overlay.innerHTML = `<h2 class="text-2xl font-bold mb-4">Startup Error</h2><div class="bg-black/50 p-4 rounded border border-red-900"><strong>${msg}</strong><br><small>${url}:${line}</small></div>`;
-            }
-            return false;
-        };
-
-        // 2. Timeout Fallback
-        setTimeout(() => {
-            const msg = document.getElementById('timeout-msg');
-            if (msg) msg.style.display = 'block';
-        }, 3500);
-    </script>
-
     <script type="text/babel" data-type="module">
-        import React, { useState, useEffect, Suspense, Component, useRef } from 'react';
+        import React, { useEffect, useMemo, useRef, useState } from 'react';
         import { createRoot } from 'react-dom/client';
         import { Canvas, useThree } from '@react-three/fiber';
-        import { OrbitControls, RoundedBox, Environment, Html } from '@react-three/drei';
-        import { XR, Controllers, Hands, VRButton, useXR } from '@react-three/xr';
+        import { OrbitControls, RoundedBox, Environment } from '@react-three/drei';
         import * as THREE from 'three';
+        import { STLExporter } from 'three/addons/exporters/STLExporter.js';
+        import { OBJExporter } from 'three/addons/exporters/OBJExporter.js';
+        import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
-        // --- Error Boundary Component ---
-        class ErrorBoundary extends Component {
-            constructor(props) { super(props); this.state = { hasError: false, error: null }; }
-            static getDerivedStateFromError(error) { return { hasError: true, error }; }
-            componentDidCatch(error, errorInfo) { console.error("React Error:", error, errorInfo); }
-            render() {
-                if (this.state.hasError) {
-                    return (
-                        <div className="absolute inset-0 flex items-center justify-center text-red-400 p-8 text-center">
-                            <div>
-                                <h2 className="text-xl font-bold mb-2">Something crashed.</h2>
-                                <pre className="bg-black/50 p-4 rounded text-left text-xs">{this.state.error?.toString()}</pre>
-                            </div>
-                        </div>
-                    );
-                }
-                return this.props.children;
-            }
-        }
+        const GRID_SIZE = 24;
+        const MIN_TOUCH = 'min-w-[44px] min-h-[44px]';
+        const MATERIAL_TYPES = ['plastic', 'wood', 'metal'];
+        const PALETTE = ['#ef4444','#3b82f6','#eab308','#22c55e','#f8fafc','#475569','#0f172a','#db2777','#f97316','#a855f7','#78350f','#bae6fd'];
+        const createId = () => (crypto?.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2));
 
-        // --- Inline Icons ---
         const Icons = {
-            Undo: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/></svg>,
-            Redo: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 7v6h-6"/><path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3l3 2.7"/></svg>,
-            Trash: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>,
-            Rotate: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg>,
-            Save: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>,
-            Grid: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M3 15h18"/><path d="M9 3v18"/><path d="M15 3v18"/></svg>,
-            Box: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" x2="12" y1="22.08" y2="12"/></svg>,
-            Sun: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>,
-            Moon: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>,
-            Camera: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg>,
-            SoundOn: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>,
-            SoundOff: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" x2="1" y1="1" y2="23"/></svg>,
-            Download: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>,
-            Upload: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg>,
-            Glasses: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="6" cy="15" r="4"/><circle cx="18" cy="15" r="4"/><path d="M14 15a2 2 0 0 0-2-2 2 2 0 0 0-2 2"/><path d="M2.5 13 5 7c.7-1.3 1.4-2 3-2"/><path d="M21.5 13 19 7c-.7-1.3-1.5-2-3-2"/></svg>
+            Move: () => '✥', Build: () => '⬛', Delete: () => '🗑', Undo: () => '↶', Redo: () => '↷',
+            Save: () => '💾', Load: () => '📂', Shot: () => '📸', Punch: () => '👊', Start: () => '🚀'
         };
 
-        const GRID_SIZE = 20;
-        const generateId = () => (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : Math.random().toString(36).substring(2);
-
-        // --- Audio System ---
-        const playSound = (type, enabled) => {
+        const playImpactSound = (material, enabled, distanceFactor = 1) => {
             if (!enabled) return;
-            try {
-                const AudioContext = window.AudioContext || window.webkitAudioContext;
-                if (!AudioContext) return;
-                const ctx = new AudioContext();
-                const osc = ctx.createOscillator();
-                const gain = ctx.createGain();
-                osc.connect(gain);
-                gain.connect(ctx.destination);
-                const now = ctx.currentTime;
-                
-                if (type === 'snap') {
-                    osc.type = 'sine';
-                    osc.frequency.setValueAtTime(600, now);
-                    osc.frequency.exponentialRampToValueAtTime(1200, now + 0.05);
-                    gain.gain.setValueAtTime(0.1, now);
-                    gain.gain.exponentialRampToValueAtTime(0.01, now + 0.05);
-                    osc.start(now); osc.stop(now + 0.05);
-                } else if (type === 'delete') {
-                    osc.type = 'triangle';
-                    osc.frequency.setValueAtTime(300, now);
-                    osc.frequency.linearRampToValueAtTime(100, now + 0.1);
-                    gain.gain.setValueAtTime(0.1, now);
-                    gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
-                    osc.start(now); osc.stop(now + 0.1);
-                }
-            } catch (e) { console.warn("Audio fail", e); }
+            const AC = window.AudioContext || window.webkitAudioContext;
+            if (!AC) return;
+            const ctx = new AC();
+            const duration = 0.08;
+            const now = ctx.currentTime;
+            const buffer = ctx.createBuffer(1, ctx.sampleRate * duration, ctx.sampleRate);
+            const data = buffer.getChannelData(0);
+            for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (data.length / 4));
+
+            const source = ctx.createBufferSource();
+            source.buffer = buffer;
+            const filter = ctx.createBiquadFilter();
+            const gain = ctx.createGain();
+            const profile = {
+                plastic: { freq: 1300, q: 4, amp: 0.015 },
+                wood: { freq: 620, q: 1.5, amp: 0.02 },
+                metal: { freq: 2200, q: 8, amp: 0.012 }
+            }[material] || { freq: 1000, q: 3, amp: 0.015 };
+
+            filter.type = 'bandpass';
+            filter.frequency.value = profile.freq;
+            filter.Q.value = profile.q;
+            gain.gain.value = profile.amp * Math.max(0.35, Math.min(1, 1 / distanceFactor));
+            gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+
+            source.connect(filter);
+            filter.connect(gain);
+            gain.connect(ctx.destination);
+            source.start(now);
+            source.stop(now + duration);
         };
 
-        const PALETTE = [
-            { name: 'Red', hex: '#ef4444' }, { name: 'Blue', hex: '#3b82f6' },
-            { name: 'Yellow', hex: '#eab308' }, { name: 'Green', hex: '#22c55e' },
-            { name: 'White', hex: '#f8fafc' }, { name: 'Grey', hex: '#475569' },
-            { name: 'Black', hex: '#0f172a' }, { name: 'Pink', hex: '#db2777' },
-            { name: 'Orange', hex: '#f97316' }, { name: 'Purple', hex: '#a855f7' },
-            { name: 'Brown', hex: '#78350f' }, { name: 'Sky', hex: '#bae6fd' }
-        ];
-
-        // --- 3D Components ---
-        const PlasticMaterial = ({ color, hover = false }) => (
-            <meshPhysicalMaterial
-                color={color} roughness={0.2} metalness={0.0}
-                clearcoat={0.5} clearcoatRoughness={0.1} ior={1.5}
-                transparent={hover} opacity={hover ? 0.6 : 1}
-            />
-        );
-
-        const Brick = ({ position, rotation, color, onClick, onPointerMove, transparent = false }) => (
-            <group position={position} rotation={[0, rotation, 0]}>
-                <RoundedBox 
-                    args={[1, 1, 1]} radius={0.05} smoothness={4} position={[0, 0.5, 0]} 
-                    castShadow receiveShadow
-                    onPointerDown={(e) => { if(onClick) { e.stopPropagation(); onClick(e); } }}
-                    onPointerMove={(e) => { if(onPointerMove) { e.stopPropagation(); onPointerMove(e); } }}
-                >
-                    <PlasticMaterial color={color} hover={transparent} />
-                </RoundedBox>
-                <mesh position={[0, 1.1, 0]} castShadow receiveShadow>
-                    <cylinderGeometry args={[0.35, 0.35, 0.2, 24]} />
-                    <PlasticMaterial color={color} hover={transparent} />
-                </mesh>
-            </group>
-        );
-
-        const LightingEnvironment = ({ isDark }) => {
-            return <Environment preset={isDark ? "city" : "park"} blur={0.8} />;
-        };
-
-        // --- VR Dashboard ---
-        const VRDashboard = ({ activeColor, setActiveColor, mode, setMode, setRotation, undo, saveBuild }) => {
-            const [savedText, setSavedText] = useState("SAVE");
-            const handleSave = () => {
-                saveBuild();
-                setSavedText("SAVED!");
-                setTimeout(() => setSavedText("SAVE"), 2000);
-            };
-            return (
-                <Html transform position={[0, 2.5, -2]} scale={0.5} rotation={[0.2, 0, 0]}>
-                    <div className="bg-slate-900/90 p-6 rounded-3xl border-2 border-slate-600 w-[550px] flex flex-col gap-4 shadow-2xl backdrop-blur-xl text-white select-none">
-                        <div className="flex justify-between items-center border-b border-slate-700 pb-2">
-                            <h2 className="text-2xl font-bold flex items-center gap-2"><Icons.Glasses /> VR Builder</h2>
-                            <div className="text-xs text-slate-400">Meta Quest Optimized</div>
-                        </div>
-                        <div className="flex gap-4 justify-center">
-                            <button onClick={() => setMode(mode === 'build' ? 'delete' : 'build')} className={`flex-1 py-4 rounded-xl font-bold text-xl flex flex-col items-center gap-2 transition-colors ${mode === 'build' ? 'bg-blue-600' : 'bg-red-600'}`}>
-                                {mode === 'build' ? <Icons.Box /> : <Icons.Trash />} {mode === 'build' ? 'BUILD' : 'DELETE'}
-                            </button>
-                            <button onClick={() => setRotation(r => r + Math.PI/2)} className="flex-1 bg-slate-700 py-4 rounded-xl flex flex-col items-center gap-2 active:bg-slate-600">
-                                <Icons.Rotate /> ROTATE
-                            </button>
-                            <button onClick={undo} className="flex-1 bg-slate-700 py-4 rounded-xl flex flex-col items-center gap-2 active:bg-slate-600">
-                                <Icons.Undo /> UNDO
-                            </button>
-                            <button onClick={handleSave} className="flex-1 bg-emerald-700 py-4 rounded-xl flex flex-col items-center gap-2 active:bg-emerald-600">
-                                <Icons.Save /> {savedText}
-                            </button>
-                        </div>
-                        <div className="grid grid-cols-6 gap-3 mt-2">
-                            {PALETTE.map(c => (
-                                <button key={c.hex} onClick={() => setActiveColor(c.hex)} className={`h-12 rounded-xl border-4 transition-all ${activeColor === c.hex ? 'border-white scale-105' : 'border-transparent hover:scale-105'}`} style={{ backgroundColor: c.hex }} />
-                            ))}
-                        </div>
-                    </div>
-                </Html>
-            );
-        };
-
-        const SceneContent = ({ 
-            bricks, hoverPos, activeColor, rotation,
-            addBrick, removeBrick, setHoverPos,
-            mode, showGrid, isDark, setMode, setRotation, undo, saveBuild,
-            soundEnabled, screenshotTrigger, onScreenshotTaken
-        }) => {
-            const { isPresenting } = useXR(); 
-            const { gl, scene, camera } = useThree();
-
-            useEffect(() => {
-                if (screenshotTrigger) {
-                    gl.render(scene, camera);
-                    const dataUrl = gl.domElement.toDataURL('image/png');
-                    const link = document.createElement('a');
-                    link.setAttribute('download', 'my-lego-build.png');
-                    link.setAttribute('href', dataUrl);
-                    link.click();
-                    onScreenshotTaken();
-                }
-            }, [screenshotTrigger, gl, scene, camera, onScreenshotTaken]);
-            
-            const handlePointerMove = (e) => {
-                e.stopPropagation();
-                if (mode === 'delete') { setHoverPos(null); return; }
-                const pt = e.point;
-                let pos = [0, 0, 0];
-                if (e.object.geometry.type === 'PlaneGeometry') {
-                    pos = [Math.round(pt.x), 0, Math.round(pt.z)];
-                } else {
-                    const n = e.face.normal;
-                    pos = [Math.round(pt.x + n.x * 0.5), Math.floor(pt.y + n.y * 0.5), Math.round(pt.z + n.z * 0.5)];
-                    if (pos[1] < 0) pos[1] = 0;
-                }
-                setHoverPos(prev => (!prev || prev[0]!==pos[0] || prev[1]!==pos[1] || prev[2]!==pos[2]) ? pos : prev);
-            };
-
-            const handleClick = (e) => {
-                e.stopPropagation();
-                if (mode === 'delete') return;
-                if (hoverPos) {
-                    const exists = bricks.some(b => b.position[0]===hoverPos[0] && b.position[1]===hoverPos[1] && b.position[2]===hoverPos[2]);
-                    if (!exists) addBrick({ position: hoverPos, color: activeColor, rotation: rotation });
-                }
-            };
-
-            const boardPosition = isPresenting ? [0, 0.8, -1.5] : [0, 0, 0];
-            const boardScale = isPresenting ? 0.3 : 1; 
-
-            return (
-                <>
-                    <ambientLight intensity={isDark ? 0.3 : 0.7} />
-                    <directionalLight position={[10, 20, 10]} intensity={isDark ? 0.8 : 1.5} castShadow shadow-mapSize={[1024, 1024]}>
-                        <orthographicCamera attach="shadow-camera" args={[-20, 20, 20, -20]} />
-                    </directionalLight>
-
-                    {/* Controllers & Hands for VR */}
-                    <Controllers />
-                    <Hands />
-
-                    {isPresenting && (
-                        <VRDashboard 
-                            activeColor={activeColor} setActiveColor={setActiveColor}
-                            mode={mode} setMode={setMode}
-                            setRotation={setRotation} undo={undo} saveBuild={saveBuild}
-                        />
-                    )}
-
-                    <group position={boardPosition} scale={boardScale}>
-                        {bricks.map((brick) => (
-                            <Brick
-                                key={brick.id}
-                                position={brick.position}
-                                rotation={brick.rotation}
-                                color={brick.color}
-                                onClick={(e) => {
-                                    if (mode === 'delete') removeBrick(brick.id);
-                                    else { handlePointerMove(e); handleClick(e); }
-                                }}
-                                onPointerMove={handlePointerMove}
-                            />
-                        ))}
-                        
-                        {mode === 'build' && hoverPos && (
-                            <Brick position={hoverPos} rotation={rotation} color={activeColor} transparent={true} />
-                        )}
-
-                        <mesh rotation={[-Math.PI/2, 0, 0]} position={[0, -0.01, 0]} receiveShadow onPointerMove={handlePointerMove} onClick={handleClick}>
-                            <planeGeometry args={[50, 50]} />
-                            <meshStandardMaterial transparent opacity={0} />
-                        </mesh>
-                        
-                        {showGrid && (
-                            <gridHelper args={[GRID_SIZE * 2, GRID_SIZE * 2, isDark ? 0x555555 : 0x888888, isDark ? 0x222222 : 0xe5e7eb]} position={[0, 0.01, 0]} />
-                        )}
-                    </group>
-
-                    {!isPresenting && (
-                        <OrbitControls makeDefault minPolarAngle={0} maxPolarAngle={Math.PI / 2 - 0.1} dampingFactor={0.05} enableDamping />
-                    )}
-                </>
-            );
-        };
-
-        const UIButton = ({ icon: Icon, onClick, active, label, color }) => (
-            <button onClick={onClick} title={label} style={{ backgroundColor: color }}
-                className={`flex items-center justify-center p-3 rounded-xl transition-all duration-200 backdrop-blur-sm ${active ? 'bg-blue-600 text-white shadow-lg scale-105' : 'bg-white/90 text-slate-700 hover:bg-white border border-slate-200'}`}
+        const UIButton = ({ label, onClick, active, icon, disabled }) => (
+            <button
+                onClick={onClick}
+                disabled={disabled}
+                className={`${MIN_TOUCH} px-3 py-2 rounded-xl text-sm font-semibold border transition ${active ? 'bg-blue-600 text-white border-blue-500' : 'bg-white/95 text-slate-700 border-slate-200'} ${disabled ? 'opacity-50 cursor-not-allowed' : 'hover:scale-[1.02]'}`}
+                title={label}
             >
-                {Icon ? <Icon /> : <div className="w-5 h-5 rounded-full border-2 border-white/50" />}
+                <span className="inline-flex items-center gap-2"><span>{icon ? icon() : ''}</span>{label}</span>
             </button>
         );
 
-        const ColorSwatch = ({ color, active, onClick }) => (
-            <button
-                onClick={onClick}
-                className={`
-                w-10 h-10 rounded-full border-4 transition-transform duration-200 shadow-sm
-                ${active ? 'border-white scale-110 shadow-md ring-2 ring-blue-400' : 'border-transparent hover:scale-105'}
-                `}
-                style={{ backgroundColor: color }}
-                aria-label="Select color"
-            />
-        );
+        const Brick = ({ brick, onPointerDown, onPointerMove, dynamic }) => {
+            const shade = Math.max(0.55, 1 - (dynamic?.damage || 0) * 0.07);
+            const color = new THREE.Color(brick.color).multiplyScalar(shade).getStyle();
+            return (
+                <group position={[brick.position[0] + (dynamic?.offset?.x || 0), brick.position[1] + (dynamic?.offset?.y || 0), brick.position[2] + (dynamic?.offset?.z || 0)]} rotation={[dynamic?.tilt?.x || 0, brick.rotation + (dynamic?.tilt?.y || 0), dynamic?.tilt?.z || 0]}>
+                    <RoundedBox args={[1,1,1]} radius={0.05} smoothness={4} position={[0,0.5,0]} castShadow receiveShadow onPointerDown={onPointerDown} onPointerMove={onPointerMove}>
+                        <meshPhysicalMaterial color={color} roughness={0.22} clearcoat={0.45} />
+                    </RoundedBox>
+                    <mesh position={[0,1.1,0]} castShadow receiveShadow>
+                        <cylinderGeometry args={[0.35,0.35,0.2,20]} />
+                        <meshPhysicalMaterial color={color} roughness={0.24} clearcoat={0.5} />
+                    </mesh>
+                </group>
+            );
+        };
+
+        const snapshot = (bricks) => bricks.map((b) => ({ ...b, position: [...b.position] }));
+
+        const buildMergedGeometry = (bricks) => {
+            const all = [];
+            bricks.forEach((b) => {
+                const box = new THREE.BoxGeometry(1, 1, 1);
+                box.translate(0, 0.5, 0);
+                box.rotateY(b.rotation || 0);
+                box.translate(...b.position);
+                all.push(box.toNonIndexed());
+
+                const stud = new THREE.CylinderGeometry(0.35, 0.35, 0.2, 24);
+                stud.translate(0, 1.1, 0);
+                stud.rotateY(b.rotation || 0);
+                stud.translate(...b.position);
+                all.push(stud.toNonIndexed());
+            });
+            if (!all.length) return null;
+            return mergeGeometries(all, true);
+        };
+
+        function Scene({ app }) {
+            const { gl, scene, camera } = useThree();
+
+            useEffect(() => {
+                app.setScreenshotExporter(() => {
+                    gl.render(scene, camera);
+                    const source = gl.domElement;
+                    const scale = Math.max(2, Math.ceil(window.devicePixelRatio || 1));
+                    const out = document.createElement('canvas');
+                    out.width = source.width * scale;
+                    out.height = source.height * scale;
+                    const ctx = out.getContext('2d');
+                    ctx.scale(scale, scale);
+                    ctx.drawImage(source, 0, 0, source.width, source.height);
+                    const link = document.createElement('a');
+                    link.href = out.toDataURL('image/png');
+                    link.download = 'brickbuilder-screenshot.png';
+                    link.click();
+                });
+            }, [gl, scene, camera]);
+
+            const handlePointerMove = (e) => {
+                if (app.mode === 'delete') return app.setHover(null);
+                const p = e.point;
+                let pos;
+                if (e.object.geometry.type === 'PlaneGeometry') pos = [Math.round(p.x), 0, Math.round(p.z)];
+                else {
+                    const n = e.face.normal;
+                    pos = [Math.round(p.x + n.x * 0.5), Math.floor(p.y + n.y * 0.5), Math.round(p.z + n.z * 0.5)];
+                    pos[1] = Math.max(0, pos[1]);
+                }
+                app.setHover(pos);
+            };
+
+            const addAtHover = () => {
+                if (!app.hover) return;
+                if (app.bricks.some((b) => b.position.every((v, i) => v === app.hover[i]))) return;
+                const next = [...app.bricks, { id: createId(), position: [...app.hover], rotation: app.rotation, color: app.activeColor, material: app.activeMaterial }];
+                app.commit(next);
+                playImpactSound(app.activeMaterial, app.soundEnabled);
+            };
+
+            const moveSelected = () => {
+                if (!app.selectedId || !app.hover) return;
+                if (app.bricks.some((b) => b.id !== app.selectedId && b.position.every((v, i) => v === app.hover[i]))) return;
+                const next = app.bricks.map((b) => b.id === app.selectedId ? ({ ...b, position: [...app.hover] }) : b);
+                app.commit(next);
+                playImpactSound('wood', app.soundEnabled);
+            };
+
+            return (
+                <>
+                    <ambientLight intensity={0.65} />
+                    <directionalLight position={[10, 18, 8]} intensity={1.25} castShadow />
+                    <Environment preset="city" blur={0.7} />
+
+                    {app.bricks.map((brick) => (
+                        <Brick
+                            key={brick.id}
+                            brick={brick}
+                            dynamic={app.physics[brick.id]}
+                            onPointerMove={handlePointerMove}
+                            onPointerDown={(e) => {
+                                e.stopPropagation();
+                                if (app.mode === 'delete') {
+                                    app.commit(app.bricks.filter((b) => b.id !== brick.id));
+                                    playImpactSound('metal', app.soundEnabled);
+                                } else if (app.mode === 'move') {
+                                    app.setSelectedId(brick.id);
+                                } else {
+                                    handlePointerMove(e);
+                                    addAtHover();
+                                }
+                            }}
+                        />
+                    ))}
+
+                    {app.mode !== 'delete' && app.hover && (
+                        <group position={app.hover}>
+                            <RoundedBox args={[1,1,1]} radius={0.05} smoothness={3} position={[0,0.5,0]}>
+                                <meshStandardMaterial color={app.mode === 'move' ? '#22c55e' : app.activeColor} transparent opacity={0.35} />
+                            </RoundedBox>
+                        </group>
+                    )}
+
+                    <mesh rotation={[-Math.PI/2, 0, 0]} onPointerMove={handlePointerMove} onClick={(e) => { e.stopPropagation(); app.mode === 'move' ? moveSelected() : addAtHover(); }}>
+                        <planeGeometry args={[64, 64]} />
+                        <meshStandardMaterial transparent opacity={0} />
+                    </mesh>
+                    <gridHelper args={[GRID_SIZE * 2, GRID_SIZE * 2, 0x6b7280, 0x374151]} position={[0,0.01,0]} />
+                    <OrbitControls makeDefault minPolarAngle={0} maxPolarAngle={Math.PI / 2 - 0.05} enableDamping dampingFactor={0.06} />
+                </>
+            );
+        }
 
         function App() {
             const [bricks, setBricks] = useState([]);
             const [history, setHistory] = useState([[]]);
             const [historyIndex, setHistoryIndex] = useState(0);
-            const [hoverPos, setHoverPos] = useState(null);
-            const [activeColor, setActiveColor] = useState(PALETTE[0].hex);
-            const [rotation, setRotation] = useState(0);
+            const [hover, setHover] = useState(null);
             const [mode, setMode] = useState('build');
-            const [showGrid, setShowGrid] = useState(true);
-            const [isDark, setIsDark] = useState(false);
+            const [rotation, setRotation] = useState(0);
+            const [activeColor, setActiveColor] = useState(PALETTE[0]);
+            const [activeMaterial, setActiveMaterial] = useState('plastic');
             const [soundEnabled, setSoundEnabled] = useState(true);
-            const [screenshotTrigger, setScreenshotTrigger] = useState(false);
-            const fileInputRef = useRef(null);
+            const [selectedId, setSelectedId] = useState(null);
+            const [showOnboarding, setShowOnboarding] = useState(true);
+            const [physics, setPhysics] = useState({});
+            const screenshotRef = useRef(null);
 
             useEffect(() => {
-                const loader = document.getElementById('loader');
-                if(loader) {
-                    loader.style.opacity = '0';
-                    setTimeout(() => loader.style.display = 'none', 500);
+                const saved = localStorage.getItem('lego-build-v2');
+                if (saved) {
+                    try {
+                        const parsed = JSON.parse(saved);
+                        if (Array.isArray(parsed.bricks)) {
+                            setBricks(parsed.bricks);
+                            setHistory([snapshot(parsed.bricks)]);
+                            setHistoryIndex(0);
+                        }
+                    } catch {}
                 }
+                const timer = setTimeout(() => setShowOnboarding(false), 6000);
+                return () => clearTimeout(timer);
             }, []);
-
-            const addToHistory = (newBricks) => {
-                const newHistory = history.slice(0, historyIndex + 1);
-                newHistory.push(newBricks);
-                setHistory(newHistory);
-                setHistoryIndex(newHistory.length - 1);
-            };
-            const addBrick = (d) => { 
-                const n = [...bricks, { ...d, id: generateId() }]; 
-                setBricks(n); 
-                addToHistory(n);
-                playSound('snap', soundEnabled);
-            };
-            const removeBrick = (id) => { 
-                const n = bricks.filter(b => b.id !== id); 
-                setBricks(n); 
-                addToHistory(n);
-                playSound('delete', soundEnabled);
-            };
-            const undo = () => { if (historyIndex > 0) { setHistoryIndex(historyIndex - 1); setBricks(history[historyIndex - 1]); }};
-            const redo = () => { if (historyIndex < history.length - 1) { setHistoryIndex(historyIndex + 1); setBricks(history[historyIndex + 1]); }};
-            const clearAll = () => { if (confirm('Clear?')) { setBricks([]); addToHistory([]); }};
-            
-            const saveBuild = () => { try { localStorage.setItem('lego-build', JSON.stringify(bricks)); if(!document.querySelector('canvas').xr) alert('Saved!'); } catch(e){} };
-            
-            const exportBuild = () => {
-                const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-                const a = document.createElement('a');
-                a.href = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(bricks));
-                a.download = `lego-build-${timestamp}.json`; document.body.appendChild(a); a.click(); a.remove();
-            };
-            
-            const importBuild = (e) => {
-                const f = e.target.files[0]; if(!f) return;
-                const r = new FileReader();
-                r.onload = (ev) => { try { const p = JSON.parse(ev.target.result); if(Array.isArray(p)) { setBricks(p); addToHistory(p); } } catch(err){} };
-                r.readAsText(f); e.target.value = '';
-            };
 
             useEffect(() => {
-                const saved = localStorage.getItem('lego-build');
-                if (saved) { try { const p = JSON.parse(saved); setBricks(p); setHistory([p]); } catch (e) {} }
+                let raf;
+                const tick = () => {
+                    setPhysics((prev) => {
+                        const next = {};
+                        Object.entries(prev).forEach(([id, s]) => {
+                            const vy = s.vy - 0.006;
+                            const ox = s.offset.x + s.vx;
+                            const oy = Math.max(0, s.offset.y + vy);
+                            const oz = s.offset.z + s.vz;
+                            const damp = 0.94;
+                            const nvx = s.vx * damp;
+                            const nvy = oy === 0 ? -vy * 0.42 : vy;
+                            const nvz = s.vz * damp;
+                            if (Math.abs(nvx) + Math.abs(nvy) + Math.abs(nvz) > 0.002 || oy > 0.001) {
+                                next[id] = {
+                                    ...s,
+                                    vx: nvx,
+                                    vy: nvy,
+                                    vz: nvz,
+                                    offset: { x: ox, y: oy, z: oz },
+                                    tilt: { x: s.tilt.x + nvx * 0.2, y: s.tilt.y + nvz * 0.2, z: s.tilt.z + nvx * 0.15 }
+                                };
+                            }
+                        });
+                        return next;
+                    });
+                    raf = requestAnimationFrame(tick);
+                };
+                raf = requestAnimationFrame(tick);
+                return () => cancelAnimationFrame(raf);
             }, []);
+
+            const commit = (nextBricks) => {
+                const snap = snapshot(nextBricks);
+                const nextHistory = history.slice(0, historyIndex + 1);
+                nextHistory.push(snap);
+                setHistory(nextHistory);
+                setHistoryIndex(nextHistory.length - 1);
+                setBricks(snap);
+            };
+
+            const undo = () => {
+                if (historyIndex <= 0) return;
+                const i = historyIndex - 1;
+                setHistoryIndex(i);
+                setBricks(snapshot(history[i]));
+            };
+
+            const redo = () => {
+                if (historyIndex >= history.length - 1) return;
+                const i = historyIndex + 1;
+                setHistoryIndex(i);
+                setBricks(snapshot(history[i]));
+            };
+
+            const saveProject = () => {
+                const payload = { version: 1, savedAt: new Date().toISOString(), bricks: snapshot(bricks) };
+                localStorage.setItem('lego-build-v2', JSON.stringify(payload));
+                alert('Project saved locally.');
+            };
+
+            const reloadProject = () => {
+                const raw = localStorage.getItem('lego-build-v2');
+                if (!raw) return alert('No saved project found.');
+                try {
+                    const payload = JSON.parse(raw);
+                    if (!Array.isArray(payload.bricks)) return;
+                    setBricks(snapshot(payload.bricks));
+                    setHistory([snapshot(payload.bricks)]);
+                    setHistoryIndex(0);
+                } catch {}
+            };
+
+            const download = (name, body, type) => {
+                const blob = new Blob([body], { type });
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = name;
+                a.click();
+                URL.revokeObjectURL(a.href);
+            };
+
+            const exportMesh = (kind) => {
+                const merged = buildMergedGeometry(bricks);
+                if (!merged) return alert('Nothing to export yet.');
+                const mesh = new THREE.Mesh(merged, new THREE.MeshStandardMaterial());
+                const group = new THREE.Group();
+                group.add(mesh);
+                if (kind === 'stl') {
+                    const stl = new STLExporter().parse(group, { binary: false });
+                    download('brickbuilder.stl', stl, 'model/stl');
+                } else {
+                    const obj = new OBJExporter().parse(group);
+                    download('brickbuilder.obj', obj, 'text/plain');
+                }
+            };
+
+            const punchAll = () => {
+                const dir = new THREE.Vector3(0.15, 0.3, -0.9).normalize();
+                setPhysics((prev) => {
+                    const next = { ...prev };
+                    bricks.forEach((b) => {
+                        const damage = (next[b.id]?.damage || 0) + 1;
+                        const force = 0.06 + damage * 0.008;
+                        const jitter = new THREE.Vector3((Math.random() - 0.5) * 0.08, Math.random() * 0.07, (Math.random() - 0.5) * 0.08);
+                        const v = dir.clone().multiplyScalar(force).add(jitter);
+                        next[b.id] = {
+                            damage,
+                            vx: v.x,
+                            vy: v.y,
+                            vz: v.z,
+                            offset: next[b.id]?.offset || { x: 0, y: 0, z: 0 },
+                            tilt: next[b.id]?.tilt || { x: 0, y: 0, z: 0 }
+                        };
+                    });
+                    return next;
+                });
+                playImpactSound('metal', soundEnabled, 1.4);
+            };
+
+            const app = useMemo(() => ({
+                bricks, hover, setHover, mode, rotation, activeColor, activeMaterial,
+                selectedId, setSelectedId, physics, soundEnabled,
+                commit,
+                setScreenshotExporter: (fn) => { screenshotRef.current = fn; }
+            }), [bricks, hover, mode, rotation, activeColor, activeMaterial, selectedId, physics, soundEnabled]);
 
             return (
-                <div className={`w-full h-screen relative select-none touch-none overflow-hidden transition-colors duration-500 ${isDark ? 'bg-slate-900' : 'bg-blue-50'}`}>
-                    <ErrorBoundary>
-                        <input type="file" ref={fileInputRef} onChange={importBuild} accept=".json" style={{display: 'none'}} />
-                        
-                        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-50 pointer-events-auto">
-                            <VRButton className="bg-black text-white px-6 py-3 rounded-full font-bold shadow-xl border-2 border-white/20 hover:scale-105 transition-transform" />
-                        </div>
+                <div className="w-full h-screen relative overflow-hidden bg-slate-900 text-slate-900">
+                    <Canvas shadows dpr={[1, Math.min(3, window.devicePixelRatio || 2)]} gl={{ preserveDrawingBuffer: true }} camera={{ position: [8, 8, 8], fov: 45 }}>
+                        <Scene app={app} />
+                    </Canvas>
 
-                        <Canvas 
-                            shadows 
-                            dpr={[1, 2]} 
-                            gl={{ preserveDrawingBuffer: true }}
-                            camera={{ position: [8, 8, 8], fov: 45 }}
-                        >
-                            <XR>
-                                <SceneContent
-                                    bricks={bricks} hoverPos={hoverPos} setHoverPos={setHoverPos}
-                                    activeColor={activeColor} rotation={rotation}
-                                    addBrick={addBrick} removeBrick={removeBrick}
-                                    mode={mode} setMode={setMode}
-                                    showGrid={showGrid} isDark={isDark}
-                                    setRotation={setRotation} undo={undo} saveBuild={saveBuild}
-                                    soundEnabled={soundEnabled}
-                                    screenshotTrigger={screenshotTrigger}
-                                    onScreenshotTaken={() => setScreenshotTrigger(false)}
-                                />
-                                {/* Optimization: Load Lighting separately */}
-                                <Suspense fallback={null}>
-                                    <LightingEnvironment isDark={isDark} />
-                                </Suspense>
-                            </XR>
-                        </Canvas>
-                        
-                        <div className="absolute top-0 left-0 right-0 p-4 flex justify-between pointer-events-none z-10">
-                            <div className="flex gap-2 pointer-events-auto">
-                                <UIButton icon={mode === 'build' ? Icons.Box : Icons.Trash} active={true} label={mode === 'build' ? 'Build Mode' : 'Delete Mode'} onClick={() => setMode(mode === 'build' ? 'delete' : 'build')} color={mode === 'delete' ? '#fca5a5' : undefined} />
-                                <UIButton icon={Icons.Rotate} label="Rotate" onClick={() => setRotation(r => r + Math.PI/2)} />
-                            </div>
-                            <div className="flex flex-wrap justify-end gap-2 pointer-events-auto max-w-[200px] sm:max-w-none">
-                                <UIButton icon={Icons.Undo} label="Undo" onClick={undo} />
-                                <UIButton icon={Icons.Redo} label="Redo" onClick={redo} />
-                                <div className="hidden sm:block w-px h-8 bg-slate-300 mx-1 self-center opacity-50"></div>
-                                
-                                <UIButton icon={Icons.Camera} label="Screenshot" onClick={() => setScreenshotTrigger(true)} />
-                                <UIButton icon={soundEnabled ? Icons.SoundOn : Icons.SoundOff} label="Sound" onClick={() => setSoundEnabled(!soundEnabled)} />
-                                
-                                <div className="hidden sm:block w-px h-8 bg-slate-300 mx-1 self-center opacity-50"></div>
-
-                                <UIButton icon={Icons.Save} label="Quick Save" onClick={saveBuild} />
-                                <UIButton icon={Icons.Download} label="Export JSON" onClick={exportBuild} />
-                                <UIButton icon={Icons.Upload} label="Import JSON" onClick={() => fileInputRef.current?.click()} />
-                                
-                                <div className="hidden sm:block w-px h-8 bg-slate-300 mx-1 self-center opacity-50"></div>
-                                
-                                <UIButton icon={isDark ? Icons.Moon : Icons.Sun} label="Theme" onClick={() => setIsDark(!isDark)} />
-                                <UIButton icon={Icons.Grid} active={showGrid} label="Toggle Grid" onClick={() => setShowGrid(!showGrid)} />
-                                <UIButton icon={Icons.Trash} label="Clear All" onClick={clearAll} className="text-red-500" />
-                            </div>
-                        </div>
-
-                        <div className="absolute bottom-6 left-0 right-0 flex flex-col items-center gap-4 pointer-events-none px-4 z-10">
-                            {mode === 'build' && (
-                                <div className="pointer-events-auto bg-white/80 backdrop-blur-md p-3 rounded-2xl shadow-xl border border-white/50 flex gap-3 overflow-x-auto max-w-full no-scrollbar mb-14">
-                                    {PALETTE.map(c => (
-                                        <ColorSwatch key={c.hex} color={c.hex} active={activeColor === c.hex} onClick={() => setActiveColor(c.hex)} />
-                                    ))}
+                    {showOnboarding && (
+                        <div className="absolute inset-0 bg-slate-900/58 backdrop-blur-[2px] z-40 flex items-center justify-center px-3" onClick={() => setShowOnboarding(false)}>
+                            <div className="max-w-md w-full bg-white rounded-2xl p-4 sm:p-6 text-slate-800 shadow-2xl border border-slate-200">
+                                <h1 className="text-lg sm:text-xl font-bold flex items-center gap-2 mb-3"><span>{Icons.Start()}</span>Start Building</h1>
+                                <div className="grid gap-2 text-sm sm:text-base">
+                                    <p>👆 <b>Tap to place</b> bricks on the ground.</p>
+                                    <p>✋ <b>Move mode</b>: select brick, then tap new spot.</p>
+                                    <p>🔁 Use <b>Undo/Redo</b> any time.</p>
                                 </div>
-                            )}
+                                <button className={`mt-4 w-full ${MIN_TOUCH} rounded-xl bg-blue-600 text-white font-semibold`} onClick={() => setShowOnboarding(false)}>Got it</button>
+                            </div>
                         </div>
-                    </ErrorBoundary>
+                    )}
+
+                    <div className="absolute top-0 left-0 right-0 z-30 p-2 sm:p-3 pointer-events-none">
+                        <div className="pointer-events-auto rounded-2xl bg-white/90 backdrop-blur-md p-2 sm:p-3 border border-slate-200">
+                            <div className="flex flex-wrap gap-2 items-center">
+                                <UIButton label="Build" icon={Icons.Build} active={mode === 'build'} onClick={() => { setMode('build'); setSelectedId(null); }} />
+                                <UIButton label="Move" icon={Icons.Move} active={mode === 'move'} onClick={() => setMode('move')} />
+                                <UIButton label="Delete" icon={Icons.Delete} active={mode === 'delete'} onClick={() => { setMode('delete'); setSelectedId(null); }} />
+                                <UIButton label="Rotate" onClick={() => {
+                                    if (mode === 'move' && selectedId) {
+                                        commit(bricks.map((b) => b.id === selectedId ? ({ ...b, rotation: b.rotation + Math.PI / 2 }) : b));
+                                    } else setRotation((r) => r + Math.PI / 2);
+                                }} />
+                                <UIButton label="Undo" icon={Icons.Undo} onClick={undo} disabled={historyIndex === 0} />
+                                <UIButton label="Redo" icon={Icons.Redo} onClick={redo} disabled={historyIndex === history.length - 1} />
+                                <UIButton label="Punch All" icon={Icons.Punch} onClick={punchAll} />
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="absolute bottom-0 left-0 right-0 z-30 p-2 sm:p-3 pointer-events-none">
+                        <div className="pointer-events-auto rounded-2xl bg-white/92 backdrop-blur-md p-2 sm:p-3 border border-slate-200 flex flex-col gap-2">
+                            <div className="flex gap-2 overflow-x-auto safe-scroll pb-1">
+                                {PALETTE.map((c) => (
+                                    <button key={c} onClick={() => setActiveColor(c)} className={`${MIN_TOUCH} w-11 h-11 rounded-full border-4 ${activeColor === c ? 'border-blue-500' : 'border-white'} shrink-0`} style={{ backgroundColor: c }} />
+                                ))}
+                            </div>
+                            <div className="flex flex-wrap gap-2 items-center text-sm">
+                                <label className="font-semibold">Material:</label>
+                                {MATERIAL_TYPES.map((m) => (
+                                    <UIButton key={m} label={m} active={activeMaterial === m} onClick={() => setActiveMaterial(m)} />
+                                ))}
+                                <UIButton label={soundEnabled ? 'Sound: On' : 'Sound: Off'} onClick={() => setSoundEnabled((s) => !s)} />
+                                <UIButton label="Save Project" icon={Icons.Save} onClick={saveProject} />
+                                <UIButton label="Reload" icon={Icons.Load} onClick={reloadProject} />
+                                <UIButton label="Export STL" onClick={() => exportMesh('stl')} />
+                                <UIButton label="Export OBJ" onClick={() => exportMesh('obj')} />
+                                <UIButton label="Export Screenshot" icon={Icons.Shot} onClick={() => screenshotRef.current?.()} />
+                            </div>
+                        </div>
+                    </div>
                 </div>
             );
         }

@@ -61,6 +61,17 @@ npx serve .
 
 Open http://localhost:3000 in your browser.
 
+
+### Browser Compatibility Note
+
+The app now uses direct ESM CDN imports (instead of an import map) to improve GitHub Pages compatibility across browsers and stricter browser settings.
+
+If the hosted page ever appears blank, do a hard refresh and check that your browser/network allows these CDNs:
+
+- `esm.sh`
+- `cdn.tailwindcss.com`
+- `unpkg.com`
+
 ## 🎮 Controls
 
 ### Desktop (Mouse)

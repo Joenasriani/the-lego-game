@@ -38,7 +38,7 @@
         import * as THREE from 'three';
         import { STLExporter } from 'three/addons/exporters/STLExporter.js';
         import { OBJExporter } from 'three/addons/exporters/OBJExporter.js';
-        import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+        import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 
         const GRID_SIZE = 24;
         const MIN_TOUCH = 'min-w-[44px] min-h-[44px]';
@@ -51,36 +51,60 @@
             Save: () => '💾', Load: () => '📂', Shot: () => '📸', Punch: () => '👊', Start: () => '🚀'
         };
 
-        const playImpactSound = (material, enabled, distanceFactor = 1) => {
-            if (!enabled) return;
+        let audioCtx = null;
+        let masterGain = null;
+        const impactBufferCache = {};
+
+        const getAudio = () => {
             const AC = window.AudioContext || window.webkitAudioContext;
-            if (!AC) return;
-            const ctx = new AC();
-            const duration = 0.08;
-            const now = ctx.currentTime;
+            if (!AC) return null;
+            if (!audioCtx) {
+                audioCtx = new AC();
+                masterGain = audioCtx.createGain();
+                masterGain.gain.value = 0.45;
+                masterGain.connect(audioCtx.destination);
+            }
+            return { ctx: audioCtx, out: masterGain };
+        };
+
+        const getImpactBuffer = (ctx) => {
+            if (impactBufferCache[ctx.sampleRate]) return impactBufferCache[ctx.sampleRate];
+            const duration = 0.1;
             const buffer = ctx.createBuffer(1, ctx.sampleRate * duration, ctx.sampleRate);
             const data = buffer.getChannelData(0);
             for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (data.length / 4));
+            impactBufferCache[ctx.sampleRate] = buffer;
+            return buffer;
+        };
+
+        const playImpactSound = (material, enabled, distanceFactor = 1) => {
+            if (!enabled) return;
+            const audio = getAudio();
+            if (!audio) return;
+            const { ctx, out } = audio;
+            if (ctx.state === 'suspended') ctx.resume();
 
             const source = ctx.createBufferSource();
-            source.buffer = buffer;
+            source.buffer = getImpactBuffer(ctx);
             const filter = ctx.createBiquadFilter();
             const gain = ctx.createGain();
             const profile = {
-                plastic: { freq: 1300, q: 4, amp: 0.015 },
-                wood: { freq: 620, q: 1.5, amp: 0.02 },
-                metal: { freq: 2200, q: 8, amp: 0.012 }
-            }[material] || { freq: 1000, q: 3, amp: 0.015 };
+                plastic: { freq: 1300, q: 4, amp: 0.012 },
+                wood: { freq: 620, q: 1.5, amp: 0.017 },
+                metal: { freq: 2200, q: 8, amp: 0.01 }
+            }[material] || { freq: 1000, q: 3, amp: 0.012 };
 
+            const now = ctx.currentTime;
+            const duration = 0.1;
             filter.type = 'bandpass';
             filter.frequency.value = profile.freq;
             filter.Q.value = profile.q;
-            gain.gain.value = profile.amp * Math.max(0.35, Math.min(1, 1 / distanceFactor));
+            gain.gain.value = profile.amp * Math.max(0.3, Math.min(1, 1 / distanceFactor));
             gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
 
             source.connect(filter);
             filter.connect(gain);
-            gain.connect(ctx.destination);
+            gain.connect(out);
             source.start(now);
             source.stop(now + duration);
         };
@@ -117,20 +141,26 @@
         const buildMergedGeometry = (bricks) => {
             const all = [];
             bricks.forEach((b) => {
-                const box = new THREE.BoxGeometry(1, 1, 1);
-                box.translate(0, 0.5, 0);
-                box.rotateY(b.rotation || 0);
-                box.translate(...b.position);
-                all.push(box.toNonIndexed());
+                const transform = new THREE.Matrix4();
+                const position = new THREE.Vector3(b.position[0], b.position[1], b.position[2]);
+                const quat = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, b.rotation || 0, 0));
+                transform.compose(position, quat, new THREE.Vector3(1, 1, 1));
 
-                const stud = new THREE.CylinderGeometry(0.35, 0.35, 0.2, 24);
+                const box = new THREE.BoxGeometry(1, 1, 1).toNonIndexed();
+                box.translate(0, 0.5, 0);
+                box.applyMatrix4(transform);
+                all.push(box);
+
+                const stud = new THREE.CylinderGeometry(0.35, 0.35, 0.2, 24).toNonIndexed();
                 stud.translate(0, 1.1, 0);
-                stud.rotateY(b.rotation || 0);
-                stud.translate(...b.position);
-                all.push(stud.toNonIndexed());
+                stud.applyMatrix4(transform);
+                all.push(stud);
             });
             if (!all.length) return null;
-            return mergeGeometries(all, true);
+            const merged = mergeGeometries(all, true);
+            const welded = mergeVertices(merged, 1e-4);
+            welded.computeVertexNormals();
+            return welded;
         };
 
         function Scene({ app }) {
@@ -305,6 +335,7 @@
                 setHistory(nextHistory);
                 setHistoryIndex(nextHistory.length - 1);
                 setBricks(snap);
+                setPhysics((prev) => Object.fromEntries(Object.entries(prev).filter(([id]) => snap.some((b) => b.id === id))));
             };
 
             const undo = () => {
@@ -432,7 +463,7 @@
                     </div>
 
                     <div className="absolute bottom-0 left-0 right-0 z-30 p-2 sm:p-3 pointer-events-none">
-                        <div className="pointer-events-auto rounded-2xl bg-white/92 backdrop-blur-md p-2 sm:p-3 border border-slate-200 flex flex-col gap-2">
+                        <div className="pointer-events-auto rounded-2xl bg-white/92 backdrop-blur-md p-2 sm:p-3 border border-slate-200 flex flex-col gap-2 max-h-[42vh] overflow-y-auto">
                             <div className="flex gap-2 overflow-x-auto safe-scroll pb-1">
                                 {PALETTE.map((c) => (
                                     <button key={c} onClick={() => setActiveColor(c)} className={`${MIN_TOUCH} w-11 h-11 rounded-full border-4 ${activeColor === c ? 'border-blue-500' : 'border-white'} shrink-0`} style={{ backgroundColor: c }} />

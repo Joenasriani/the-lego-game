@@ -43,6 +43,7 @@
         const GRID_SIZE = 24;
         const MIN_TOUCH = 'min-w-[44px] min-h-[44px]';
         const MATERIAL_TYPES = ['plastic', 'wood', 'metal'];
+        const STORAGE_KEY = 'lego-build-v2';
         const PALETTE = ['#ef4444','#3b82f6','#eab308','#22c55e','#f8fafc','#475569','#0f172a','#db2777','#f97316','#a855f7','#78350f','#bae6fd'];
         const createId = () => (crypto?.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2));
 
@@ -157,10 +158,9 @@
                 all.push(stud);
             });
             if (!all.length) return null;
-            const merged = mergeGeometries(all, true);
-            const welded = mergeVertices(merged, 1e-4);
-            welded.computeVertexNormals();
-            return welded;
+            const merged = mergeGeometries(all, false);
+            merged.computeVertexNormals();
+            return merged;
         };
 
         function Scene({ app }) {
@@ -280,7 +280,7 @@
             const screenshotRef = useRef(null);
 
             useEffect(() => {
-                const saved = localStorage.getItem('lego-build-v2');
+                const saved = localStorage.getItem(STORAGE_KEY);
                 if (saved) {
                     try {
                         const parsed = JSON.parse(saved);
@@ -354,12 +354,12 @@
 
             const saveProject = () => {
                 const payload = { version: 1, savedAt: new Date().toISOString(), bricks: snapshot(bricks) };
-                localStorage.setItem('lego-build-v2', JSON.stringify(payload));
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
                 alert('Project saved locally.');
             };
 
             const reloadProject = () => {
-                const raw = localStorage.getItem('lego-build-v2');
+                const raw = localStorage.getItem(STORAGE_KEY);
                 if (!raw) return alert('No saved project found.');
                 try {
                     const payload = JSON.parse(raw);

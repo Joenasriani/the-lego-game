@@ -1,6 +1,5 @@
 BrickBuilder 3D
 
-A mobile-first 3D building sandbox inspired by LEGO. Built with React Three Fiber, the app focuses on responsive controls, quick onboarding, clean exports, realistic subtle audio, and reliable save/reload.
 
 ## 🚀 Features
 

@@ -39,6 +39,7 @@
         import { STLExporter } from 'three/addons/exporters/STLExporter.js';
         import { OBJExporter } from 'three/addons/exporters/OBJExporter.js';
         import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+        // Note: keep this import limited to mergeGeometries for esm.sh compatibility.
 
         const GRID_SIZE = 24;
         const MIN_TOUCH = 'min-w-[44px] min-h-[44px]';
@@ -157,7 +158,7 @@
                 all.push(stud);
             });
             if (!all.length) return null;
-            const merged = mergeGeometries(all, true);
+            const merged = mergeGeometries(all, false);
             merged.computeVertexNormals();
             return merged;
         };

@@ -1,40 +1,35 @@
-BrickBuilder 3D - XR Edition
+BrickBuilder 3D
 
-A high-fidelity, mobile-first 3D building sandbox inspired by LEGO. Built with React Three Fiber, this application features physically based rendering (PBR), a fully immersive WebXR (VR/AR) mode for Meta Quest, and a robust save/load system.
+A mobile-first 3D building sandbox inspired by LEGO. Built with React Three Fiber, the app focuses on responsive controls, quick onboarding, clean exports, realistic subtle audio, and reliable save/reload.
 
-🚀 Features
+## 🚀 Features
 
-Core Mechanics
+### Core Mechanics
 
-Modular Building: Snap-to-grid system with collision detection and "Ghost Brick" previews.
+- Modular Building: Snap-to-grid placement with collision checks and a ghost brick preview.
+- Build / Move / Delete modes with rotation support.
+- Undo / Redo history stack for editing safely.
+- Save / Reload scene state with localStorage JSON persistence.
+- Punch All physics interaction with progressive damage effects.
+- Realistic low-volume procedural impact sounds (plastic / wood / metal).
 
-PBR Rendering: Realistic plastic materials with accurate Index of Refraction (IOR), roughness, and clearcoat.
+### Export & Output
 
-Save & Load: Persist builds via Local Storage or export/import JSON files to share creations.
+- 3D Export: STL (primary) and OBJ (secondary).
+- High-resolution screenshot export (canvas only, no UI overlays).
 
-Undo/Redo System: Full history stack for worry-free experimentation.
+### Responsive UI
 
-Procedural Audio: Satisfying click and pop sound effects generated via Web Audio API (no assets to load).
+- Mobile (≤768px), tablet (768–1024px), and desktop (≥1024px) friendly controls.
+- Touch-friendly controls with ~44px minimum tap targets.
+- Scroll-safe toolbars and no forced horizontal page scrolling.
 
-Screenshot Mode: High-resolution capture of your builds without UI clutter.
+### Onboarding
 
-XR / VR Support (Meta Quest Optimized)
+- First-load overlay explains the core interactions within seconds.
+- Primary “Start Building” action is highlighted.
 
-Immersive Mode: Full WebXR support. Clicking "Enter VR" transports you into the scene.
-
-Floating Dashboard: A 3D holographic menu palette that floats in front of the user in VR.
-
-Ergonomics: The board automatically adjusts height and distance for comfortable standing or seated play.
-
-Controller Support: Full 6DoF controller tracking for precise brick placement.
-
-Mobile & Desktop Responsive
-
-Touch Controls: Optimized OrbitControls for pinch-to-zoom and touch-to-rotate.
-
-Responsive UI: HUD elements adapt to screen size, ensuring thumb-reachability on mobile devices.
-
-🛠️ Tech Stack
+## 🛠️ Tech Stack
 
 Core: React 18
 
@@ -44,27 +39,21 @@ Renderer: React Three Fiber (@react-three/fiber)
 
 Helpers: React Three Drei (OrbitControls, RoundedBox, Environment)
 
-XR/VR: React Three XR (@react-three/xr)
-
 Styling: Tailwind CSS (via CDN)
 
-Icons: Lucide React
-
-📦 Quick Start
+## 📦 Quick Start
 
 This project is designed as a Single File Application for maximum portability. You do not need npm install or a build step to run the production version.
 
-Option 1: Direct Play
+### Option 1: Direct Play
 
 Download index.html.
 
 Open the file directly in any modern web browser (Chrome, Edge, Safari, Firefox).
 
-To enable VR, open the hosted link in the Meta Quest Browser.
+### Option 2: Local Development
 
-Option 2: Local Development
-
-If you want to modify the code, it is recommended to run it through a local server to avoid CORS issues with textures or WebXR.
+If you want to modify the code, run it through a local server.
 
 Install a simple HTTP server (e.g., via Python or Node):
 
@@ -73,9 +62,9 @@ npx serve .
 
 Open http://localhost:3000 in your browser.
 
-🎮 Controls
+## 🎮 Controls
 
-Desktop (Mouse)
+### Desktop (Mouse)
 
 Left Click: Place Brick / Select UI
 
@@ -85,7 +74,7 @@ Left Click (Drag): Rotate Camera
 
 Scroll: Zoom In/Out
 
-Mobile (Touch)
+### Mobile (Touch)
 
 Tap: Place Brick
 
@@ -93,17 +82,7 @@ One Finger Drag: Rotate Camera
 
 Two Finger Pinch: Zoom / Pan
 
-VR (Meta Quest)
-
-Point & Trigger: Interact with the floating UI dashboard.
-
-Controller Ray: Point at the grid to see the Ghost Brick.
-
-Trigger: Place brick.
-
-Grip/B Button: Delete mode (configurable via dashboard).
-
-📂 Data Structure
+## 📂 Data Structure
 
 Builds are saved as a JSON array of brick objects:
 
@@ -117,6 +96,6 @@ Builds are saved as a JSON array of brick objects:
 ]
 
 
-📄 License
+## 📄 License
 
 Distributed under the MIT License. See LICENSE for more information.

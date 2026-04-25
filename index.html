@@ -28,6 +28,7 @@
         import { mergeGeometries, mergeVertices } from 'https://esm.sh/three@0.154.0/examples/jsm/utils/BufferGeometryUtils.js';
 
         const GRID_SIZE = 24;
+        const MAX_BUILD_HEIGHT = 12;
         const MIN_TOUCH = 'min-w-[44px] min-h-[44px]';
         const MATERIAL_TYPES = ['plastic', 'wood', 'metal'];
         const SHAPES = [
@@ -160,6 +161,11 @@
         };
 
         const snapshot = (bricks) => bricks.map((b) => ({ ...b, position: [...b.position] }));
+        const isWithinBuildBounds = (position) => {
+            if (!position) return false;
+            const [x, y, z] = position;
+            return Math.abs(x) <= GRID_SIZE && Math.abs(z) <= GRID_SIZE && y >= 0 && y <= MAX_BUILD_HEIGHT;
+        };
 
         const buildMergedGeometry = (bricks) => {
             const all = [];
@@ -229,9 +235,16 @@
             const addAtHover = () => {
                 if (!app.hover) return;
                 const candidate = { id: createId(), position: [...app.hover], rotation: app.rotation, color: app.activeColor, material: app.activeMaterial, shape: app.activeShape };
-                if (collides(app.bricks, candidate)) return;
+                if (!isWithinBuildBounds(candidate.position)) {
+                    app.showToast(`Stay within ±${GRID_SIZE} grid and height ${MAX_BUILD_HEIGHT}.`);
+                    return;
+                }
+                if (collides(app.bricks, candidate)) {
+                    app.showToast('That spot is occupied.');
+                    return;
+                }
                 const next = [...app.bricks, candidate];
-                app.commit(next);
+                app.commit(next, 'place');
                 playImpactSound(app.activeMaterial, app.soundEnabled);
             };
 
@@ -240,7 +253,14 @@
                 const selected = app.bricks.find((b) => b.id === app.selectedId);
                 if (!selected) return;
                 const candidate = { ...selected, position: [...app.hover] };
-                if (collides(app.bricks, candidate, app.selectedId)) return;
+                if (!isWithinBuildBounds(candidate.position)) {
+                    app.showToast(`Cannot move outside build bounds.`);
+                    return;
+                }
+                if (collides(app.bricks, candidate, app.selectedId)) {
+                    app.showToast('Move blocked by another brick.');
+                    return;
+                }
                 const next = app.bricks.map((b) => b.id === app.selectedId ? candidate : b);
                 app.commit(next);
                 playImpactSound('wood', app.soundEnabled);
@@ -308,7 +328,11 @@
             const [showOnboarding, setShowOnboarding] = useState(true);
             const [physics, setPhysics] = useState({});
             const [cameraDirection, setCameraDirection] = useState([0.15, 0.3, -0.9]);
+            const [toast, setToast] = useState('');
+            const [placedCount, setPlacedCount] = useState(0);
+            const [level, setLevel] = useState(1);
             const screenshotRef = useRef(null);
+            const objectiveTarget = level * 8;
 
             useEffect(() => {
                 const saved = localStorage.getItem(STORAGE_KEY);
@@ -325,6 +349,12 @@
                 const timer = setTimeout(() => setShowOnboarding(false), 3000);
                 return () => clearTimeout(timer);
             }, []);
+
+            useEffect(() => {
+                if (!toast) return;
+                const timer = setTimeout(() => setToast(''), 1700);
+                return () => clearTimeout(timer);
+            }, [toast]);
 
             useEffect(() => {
                 let raf;
@@ -359,7 +389,9 @@
                 return () => cancelAnimationFrame(raf);
             }, []);
 
-            const commit = (nextBricks) => {
+            const showToast = (message) => setToast(message);
+
+            const commit = (nextBricks, action = 'edit') => {
                 const snap = snapshot(nextBricks);
                 const nextHistory = history.slice(0, historyIndex + 1);
                 nextHistory.push(snap);
@@ -367,6 +399,17 @@
                 setHistoryIndex(nextHistory.length - 1);
                 setBricks(snap);
                 setPhysics((prev) => Object.fromEntries(Object.entries(prev).filter(([id]) => snap.some((b) => b.id === id))));
+                if (action === 'place') {
+                    setPlacedCount((prev) => {
+                        const next = prev + 1;
+                        if (next >= objectiveTarget) {
+                            setLevel((current) => current + 1);
+                            setToast(`Level up! Now reach ${Math.min(999, (level + 1) * 8)} placements.`);
+                            return 0;
+                        }
+                        return next;
+                    });
+                }
             };
 
             const undo = () => {
@@ -419,9 +462,11 @@
                 if (kind === 'stl') {
                     const stl = new STLExporter().parse(group, { binary: false });
                     download('brickbuilder.stl', stl, 'model/stl');
+                    showToast('STL export complete.');
                 } else {
                     const obj = new OBJExporter().parse(group);
                     download('brickbuilder.obj', obj, 'text/plain');
+                    showToast('OBJ export complete.');
                 }
             };
 
@@ -451,7 +496,7 @@
             const app = useMemo(() => ({
                 bricks, hover, setHover, mode, rotation, activeColor, activeMaterial,
                 selectedId, setSelectedId, physics, soundEnabled, setCameraDirection, activeShape,
-                commit,
+                commit, showToast,
                 setScreenshotExporter: (fn) => { screenshotRef.current = fn; }
             }), [bricks, hover, mode, rotation, activeColor, activeMaterial, selectedId, physics, soundEnabled, activeShape]);
 
@@ -469,6 +514,7 @@
                                     <p>👆 <b>Tap to place</b> on highlighted grid cells.</p>
                                     <p>✋ <b>Drag to orbit</b>; pinch or scroll to zoom.</p>
                                     <p>🧭 Pick <b>Build / Move / Delete</b> from the top toolbar.</p>
+                                    <p>🎯 Goal: place <b>{objectiveTarget} bricks</b> to level up.</p>
                                 </div>
                                 <button className={`mt-4 w-full ${MIN_TOUCH} rounded-xl bg-blue-600 text-white font-semibold`} onClick={() => setShowOnboarding(false)}>Start Building</button>
                             </div>
@@ -529,6 +575,22 @@
                             </div>
                         </div>
                     </div>
+
+                    <div className="absolute top-[84px] right-3 z-30 pointer-events-none">
+                        <div className="rounded-xl bg-slate-900/82 text-white px-3 py-2 text-xs sm:text-sm shadow-lg border border-slate-700">
+                            <div className="font-semibold">Level {level} Objective</div>
+                            <div>Place {objectiveTarget} bricks ({placedCount}/{objectiveTarget})</div>
+                            <div className="w-40 h-2 mt-1 bg-slate-700 rounded-full overflow-hidden">
+                                <div className="h-full bg-emerald-400 transition-all duration-300" style={{ width: `${(placedCount / objectiveTarget) * 100}%` }} />
+                            </div>
+                        </div>
+                    </div>
+
+                    {toast && (
+                        <div className="absolute left-1/2 -translate-x-1/2 bottom-[26vh] z-40 pointer-events-none">
+                            <div className="bg-black/75 text-white text-sm px-3 py-2 rounded-xl shadow-lg border border-white/10">{toast}</div>
+                        </div>
+                    )}
                 </div>
             );
         }

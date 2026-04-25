@@ -25,7 +25,7 @@
         import * as THREE from 'https://esm.sh/three@0.154.0';
         import { STLExporter } from 'https://esm.sh/three@0.154.0/examples/jsm/exporters/STLExporter.js';
         import { OBJExporter } from 'https://esm.sh/three@0.154.0/examples/jsm/exporters/OBJExporter.js';
-        import { mergeGeometries, mergeVertices } from 'https://esm.sh/three@0.154.0/examples/jsm/utils/BufferGeometryUtils.js';
+        import { mergeGeometries } from 'https://esm.sh/three@0.154.0/examples/jsm/utils/BufferGeometryUtils.js';
 
         const GRID_SIZE = 24;
         const MAX_BUILD_HEIGHT = 12;
@@ -43,7 +43,8 @@
 
         const Icons = {
             Move: () => '✥', Build: () => '⬛', Delete: () => '🗑', Undo: () => '↶', Redo: () => '↷',
-            Save: () => '💾', Load: () => '📂', Shot: () => '📸', Punch: () => '👊', Start: () => '🚀'
+            Save: () => '💾', Load: () => '📂', Shot: () => '📸', Punch: () => '👊', Start: () => '🚀',
+            RotateL: () => '↺', RotateR: () => '↻', Replace: () => '♻️', Recenter: () => '🎯'
         };
 
         let audioCtx = null;
@@ -140,19 +141,21 @@
             </button>
         );
 
-        const Brick = ({ brick, onPointerDown, onPointerMove, dynamic }) => {
+        const Brick = ({ brick, onPointerDown, onPointerMove, onPointerUp, onPointerOut, dynamic, selected, hovered }) => {
             const shade = Math.max(0.55, 1 - (dynamic?.damage || 0) * 0.07);
             const color = new THREE.Color(brick.color).multiplyScalar(shade).getStyle();
+            const emissive = selected ? '#60a5fa' : hovered ? '#22c55e' : '#000000';
+            const emissiveIntensity = selected ? 0.45 : hovered ? 0.2 : 0;
             return (
                 <group position={[brick.position[0] + (dynamic?.offset?.x || 0), brick.position[1] + (dynamic?.offset?.y || 0), brick.position[2] + (dynamic?.offset?.z || 0)]} rotation={[dynamic?.tilt?.x || 0, brick.rotation + (dynamic?.tilt?.y || 0), dynamic?.tilt?.z || 0]}>
                     {getShape(brick.shape).cells.map(([x, z], i) => (
                         <group key={`${brick.id}-${i}`} position={[x, 0, z]}>
-                            <RoundedBox args={[1,1,1]} radius={0.05} smoothness={4} position={[0,0.5,0]} castShadow receiveShadow onPointerDown={onPointerDown} onPointerMove={onPointerMove}>
-                                <meshPhysicalMaterial color={color} roughness={0.22} clearcoat={0.45} />
+                            <RoundedBox args={[1,1,1]} radius={0.05} smoothness={4} position={[0,0.5,0]} castShadow receiveShadow onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerOut={onPointerOut}>
+                                <meshPhysicalMaterial color={color} roughness={0.22} clearcoat={0.45} emissive={emissive} emissiveIntensity={emissiveIntensity} />
                             </RoundedBox>
-                            <mesh position={[0,1.1,0]} castShadow receiveShadow>
+                            <mesh position={[0,1.1,0]} castShadow receiveShadow onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerOut={onPointerOut}>
                                 <cylinderGeometry args={[0.35,0.35,0.2,20]} />
-                                <meshPhysicalMaterial color={color} roughness={0.24} clearcoat={0.5} />
+                                <meshPhysicalMaterial color={color} roughness={0.24} clearcoat={0.5} emissive={emissive} emissiveIntensity={emissiveIntensity} />
                             </mesh>
                         </group>
                     ))}
@@ -195,6 +198,7 @@
 
         function Scene({ app }) {
             const { gl, scene, camera } = useThree();
+            const controlsRef = useRef(null);
 
             useEffect(() => {
                 app.setScreenshotExporter(() => {
@@ -217,19 +221,38 @@
                 const dir = new THREE.Vector3();
                 camera.getWorldDirection(dir);
                 app.setCameraDirection([dir.x, dir.y, dir.z]);
+                if (controlsRef.current) {
+                    const [tx, ty, tz] = app.cameraTarget;
+                    controlsRef.current.target.lerp(new THREE.Vector3(tx, ty, tz), 0.15);
+                    controlsRef.current.update();
+                }
             });
 
-            const handlePointerMove = (e) => {
-                if (app.mode === 'delete') return app.setHover(null);
+            const getSnapPosition = (e, baseY = 0) => {
                 const p = e.point;
-                let pos;
-                if (e.object.geometry.type === 'PlaneGeometry') pos = [Math.round(p.x), 0, Math.round(p.z)];
-                else {
-                    const n = e.face.normal;
-                    pos = [Math.round(p.x + n.x * 0.5), Math.floor(p.y + n.y * 0.5), Math.round(p.z + n.z * 0.5)];
-                    pos[1] = Math.max(0, pos[1]);
-                }
+                if (e.object.geometry?.type === 'PlaneGeometry') return [Math.round(p.x), baseY, Math.round(p.z)];
+                const n = e.face.normal;
+                if (n.y > 0.4) return [Math.round(p.x), Math.floor(p.y + 0.6), Math.round(p.z)];
+                if (n.y < -0.4) return [Math.round(p.x), Math.max(0, Math.floor(p.y - 0.6)), Math.round(p.z)];
+                return [Math.round(p.x + n.x * 0.5), Math.max(0, Math.floor(p.y)), Math.round(p.z + n.z * 0.5)];
+            };
+
+            const selectedBrick = app.bricks.find((b) => b.id === app.selectedId);
+
+            const handlePointerMove = (e) => {
+                const baseY = selectedBrick?.position?.[1] ?? 0;
+                const pos = getSnapPosition(e, baseY);
+                if (e.object.geometry?.type === 'PlaneGeometry') app.setHoveredId(null);
+                if (app.mode === 'delete') return app.setHover(null);
                 app.setHover(pos);
+
+                if (app.draggingId) {
+                    const moving = app.bricks.find((b) => b.id === app.draggingId);
+                    if (!moving) return;
+                    const candidate = { ...moving, position: pos };
+                    const valid = isWithinBuildBounds(candidate.position) && !collides(app.bricks, candidate, moving.id);
+                    app.setDragPosition(pos, valid);
+                }
             };
 
             const addAtHover = () => {
@@ -272,43 +295,50 @@
                     <directionalLight position={[10, 18, 8]} intensity={1.25} castShadow />
                     <Environment preset="city" blur={0.7} />
 
-                    {app.bricks.map((brick) => (
+                    {app.bricks.map((brick) => {
+                        const renderBrick = app.draggingId === brick.id && app.dragPosition ? { ...brick, position: app.dragPosition } : brick;
+                        return (
                         <Brick
                             key={brick.id}
-                            brick={brick}
+                            brick={renderBrick}
                             dynamic={app.physics[brick.id]}
-                            onPointerMove={handlePointerMove}
+                            onPointerMove={(e) => { app.setHoveredId(brick.id); handlePointerMove(e); }}
+                            onPointerOut={() => app.setHoveredId(null)}
+                            onPointerUp={endDrag}
+                            hovered={app.hoveredId === brick.id}
+                            selected={app.selectedId === brick.id}
                             onPointerDown={(e) => {
                                 e.stopPropagation();
+                                app.setSelectedId(brick.id);
                                 if (app.mode === 'delete') {
                                     app.commit(app.bricks.filter((b) => b.id !== brick.id));
                                     playImpactSound('metal', app.soundEnabled);
                                 } else if (app.mode === 'move') {
-                                    app.setSelectedId(brick.id);
+                                    app.startDrag(brick.id, brick.position);
                                 } else {
                                     handlePointerMove(e);
                                     addAtHover();
                                 }
                             }}
                         />
-                    ))}
+                    )})}
 
-                    {app.mode !== 'delete' && app.hover && (
-                        <group position={app.hover}>
-                            {(app.mode === 'move' && app.selectedId ? getShape((app.bricks.find((b) => b.id === app.selectedId) || {}).shape).cells : getShape(app.activeShape).cells).map(([x, z], i) => (
+                    {app.mode !== 'delete' && previewPosition && (
+                        <group position={previewPosition}>
+                            {selectedShapeCells.map(([x, z], i) => (
                                 <RoundedBox key={i} args={[1,1,1]} radius={0.05} smoothness={3} position={[x,0.5,z]}>
-                                    <meshStandardMaterial color={app.mode === 'move' ? '#22c55e' : app.activeColor} transparent opacity={0.35} />
+                                    <meshStandardMaterial color={previewValid ? '#22c55e' : '#ef4444'} transparent opacity={0.38} emissive={previewValid ? '#16a34a' : '#ef4444'} emissiveIntensity={0.25} />
                                 </RoundedBox>
                             ))}
                         </group>
                     )}
 
-                    <mesh rotation={[-Math.PI/2, 0, 0]} onPointerMove={handlePointerMove} onClick={(e) => { e.stopPropagation(); app.mode === 'move' ? moveSelected() : addAtHover(); }}>
+                    <mesh rotation={[-Math.PI/2, 0, 0]} onPointerMove={handlePointerMove} onPointerUp={endDrag} onClick={(e) => { e.stopPropagation(); if (app.mode !== 'move') addAtHover(); }}>
                         <planeGeometry args={[64, 64]} />
                         <meshStandardMaterial transparent opacity={0} />
                     </mesh>
                     <gridHelper args={[GRID_SIZE * 2, GRID_SIZE * 2, 0x6b7280, 0x374151]} position={[0,0.01,0]} />
-                    <OrbitControls makeDefault minPolarAngle={0} maxPolarAngle={Math.PI / 2 - 0.05} enableDamping dampingFactor={0.06} />
+                    <OrbitControls ref={controlsRef} makeDefault minPolarAngle={0.08} maxPolarAngle={Math.PI / 2 - 0.03} minDistance={4} maxDistance={65} enableDamping dampingFactor={0.08} />
                 </>
             );
         }
@@ -493,16 +523,91 @@
                 playImpactSound('metal', soundEnabled, 1.4);
             };
 
+            const startDrag = (id, startPos) => {
+                setDraggingId(id);
+                setDragPositionState(startPos);
+                setDragValid(true);
+            };
+
+            const setDragPosition = (position, valid) => {
+                setDragPositionState(position);
+                setDragValid(valid);
+            };
+
+            const finishDrag = () => {
+                if (!draggingId) return;
+                const moving = bricks.find((b) => b.id === draggingId);
+                if (!moving || !dragPosition) {
+                    setDraggingId(null);
+                    setDragPositionState(null);
+                    return;
+                }
+                if (!dragValid) {
+                    showToast('Cannot drop block there.');
+                    setDraggingId(null);
+                    setDragPositionState(null);
+                    return;
+                }
+                const candidate = { ...moving, position: dragPosition };
+                const next = bricks.map((b) => b.id === draggingId ? candidate : b);
+                commit(next);
+                playImpactSound('wood', soundEnabled);
+                setDraggingId(null);
+                setDragPositionState(null);
+            };
+
+            const rotateSelected = (direction) => {
+                if (!selectedId) return showToast('Select a block first.');
+                const selected = bricks.find((b) => b.id === selectedId);
+                if (!selected) return;
+                const rotated = { ...selected, rotation: selected.rotation + direction * (Math.PI / 2) };
+                if (collides(bricks, rotated, selectedId)) return showToast('Rotation blocked.');
+                commit(bricks.map((b) => b.id === selectedId ? rotated : b));
+            };
+
+            const deleteSelected = () => {
+                if (!selectedId) return showToast('Select a block first.');
+                commit(bricks.filter((b) => b.id !== selectedId));
+                setSelectedId(null);
+                showToast('Block deleted.');
+            };
+
+            const replaceSelected = () => {
+                if (!selectedId) return showToast('Select a block first.');
+                const selected = bricks.find((b) => b.id === selectedId);
+                if (!selected) return;
+                const replaced = { ...selected, shape: replaceShape };
+                if (collides(bricks, replaced, selectedId)) return showToast('Replacement would overlap.');
+                commit(bricks.map((b) => b.id === selectedId ? replaced : b));
+                showToast(`Replaced with ${getShape(replaceShape).label}.`);
+            };
+
+            const recenterCamera = () => {
+                if (!bricks.length) {
+                    setCameraTarget([0, 0, 0]);
+                    return;
+                }
+                const center = bricks.reduce((acc, b) => [acc[0] + b.position[0], acc[1] + b.position[1], acc[2] + b.position[2]], [0, 0, 0]).map((v) => v / bricks.length);
+                setCameraTarget([center[0], Math.max(0.5, center[1]), center[2]]);
+                showToast('Camera recentered.');
+            };
+
+            useEffect(() => {
+                if (!bricks.length) return setCameraTarget([0, 0, 0]);
+                const center = bricks.reduce((acc, b) => [acc[0] + b.position[0], acc[1] + b.position[1], acc[2] + b.position[2]], [0, 0, 0]).map((v) => v / bricks.length);
+                setCameraTarget([center[0], Math.max(0.5, center[1]), center[2]]);
+            }, [bricks]);
+
             const app = useMemo(() => ({
                 bricks, hover, setHover, mode, rotation, activeColor, activeMaterial,
                 selectedId, setSelectedId, physics, soundEnabled, setCameraDirection, activeShape,
                 commit, showToast,
                 setScreenshotExporter: (fn) => { screenshotRef.current = fn; }
-            }), [bricks, hover, mode, rotation, activeColor, activeMaterial, selectedId, physics, soundEnabled, activeShape]);
+            }), [bricks, hover, mode, rotation, activeColor, activeMaterial, selectedId, physics, soundEnabled, activeShape, hoveredId, draggingId, dragPosition, dragValid, previewValid, cameraTarget]);
 
             return (
                 <div className="w-full h-screen relative overflow-hidden bg-slate-900 text-slate-900">
-                    <Canvas shadows dpr={[1, Math.min(3, window.devicePixelRatio || 2)]} gl={{ preserveDrawingBuffer: true }} camera={{ position: [8, 8, 8], fov: 45 }}>
+                    <Canvas shadows dpr={[1, Math.min(3, window.devicePixelRatio || 2)]} gl={{ preserveDrawingBuffer: true }} camera={{ position: [8, 8, 8], fov: 45 }} onPointerMissed={() => finishDrag()}>
                         <Scene app={app} />
                     </Canvas>
 
@@ -512,7 +617,7 @@
                                 <h1 className="text-lg sm:text-xl font-bold flex items-center gap-2 mb-3"><span>{Icons.Start()}</span>Start Building</h1>
                                 <div className="grid gap-2 text-sm sm:text-base">
                                     <p>👆 <b>Tap to place</b> on highlighted grid cells.</p>
-                                    <p>✋ <b>Drag to orbit</b>; pinch or scroll to zoom.</p>
+                                    <p>✋ <b>Drag a selected block</b> in Move mode to reposition it live.</p>
                                     <p>🧭 Pick <b>Build / Move / Delete</b> from the top toolbar.</p>
                                     <p>🎯 Goal: place <b>{objectiveTarget} bricks</b> to level up.</p>
                                 </div>
@@ -527,18 +632,12 @@
                                 <UIButton label="Build" icon={Icons.Build} tone="primary" active={mode === 'build'} onClick={() => { setMode('build'); setSelectedId(null); }} />
                                 <UIButton label="Move" icon={Icons.Move} tone="primary" active={mode === 'move'} onClick={() => setMode('move')} />
                                 <UIButton label="Delete" icon={Icons.Delete} tone="primary" active={mode === 'delete'} onClick={() => { setMode('delete'); setSelectedId(null); }} />
-                                <UIButton label="Rotate" onClick={() => {
-                                    if (mode === 'move' && selectedId) {
-                                        const selected = bricks.find((b) => b.id === selectedId);
-                                        if (!selected) return;
-                                        const rotated = { ...selected, rotation: selected.rotation + Math.PI / 2 };
-                                        if (collides(bricks, rotated, selectedId)) return;
-                                        commit(bricks.map((b) => b.id === selectedId ? rotated : b));
-                                    } else setRotation((r) => r + Math.PI / 2);
-                                }} />
+                                <UIButton label="Rotate L" icon={Icons.RotateL} onClick={() => mode === 'move' ? rotateSelected(-1) : setRotation((r) => r - Math.PI / 2)} />
+                                <UIButton label="Rotate R" icon={Icons.RotateR} onClick={() => mode === 'move' ? rotateSelected(1) : setRotation((r) => r + Math.PI / 2)} />
                                 <UIButton label="Undo" icon={Icons.Undo} onClick={undo} disabled={historyIndex === 0} />
                                 <UIButton label="Redo" icon={Icons.Redo} onClick={redo} disabled={historyIndex === history.length - 1} />
                                 <UIButton label="Punch All" icon={Icons.Punch} onClick={punchAll} />
+                                <UIButton label="Recenter" icon={Icons.Recenter} onClick={recenterCamera} />
                             </div>
                         </div>
                     </div>

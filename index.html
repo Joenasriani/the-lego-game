@@ -271,17 +271,23 @@
                 playImpactSound(app.activeMaterial, app.soundEnabled);
             };
 
-            const endDrag = () => app.finishDrag();
-
-            const selectedShapeCells = app.mode === 'move' && selectedBrick ? getShape(selectedBrick.shape).cells : getShape(app.activeShape).cells;
-            const previewPosition = app.mode === 'move' && app.dragPosition ? app.dragPosition : app.hover;
-            const previewValid = app.mode === 'move'
-                ? (app.draggingId
-                    ? app.dragValid
-                    : (selectedBrick && app.hover
-                        ? isWithinBuildBounds(app.hover) && !collides(app.bricks, { ...selectedBrick, position: app.hover }, selectedBrick.id)
-                        : true))
-                : app.previewValid;
+            const moveSelected = () => {
+                if (!app.selectedId || !app.hover) return;
+                const selected = app.bricks.find((b) => b.id === app.selectedId);
+                if (!selected) return;
+                const candidate = { ...selected, position: [...app.hover] };
+                if (!isWithinBuildBounds(candidate.position)) {
+                    app.showToast(`Cannot move outside build bounds.`);
+                    return;
+                }
+                if (collides(app.bricks, candidate, app.selectedId)) {
+                    app.showToast('Move blocked by another brick.');
+                    return;
+                }
+                const next = app.bricks.map((b) => b.id === app.selectedId ? candidate : b);
+                app.commit(next);
+                playImpactSound('wood', app.soundEnabled);
+            };
 
             return (
                 <>
@@ -352,15 +358,9 @@
             const [showOnboarding, setShowOnboarding] = useState(true);
             const [physics, setPhysics] = useState({});
             const [cameraDirection, setCameraDirection] = useState([0.15, 0.3, -0.9]);
-            const [cameraTarget, setCameraTarget] = useState([0, 0, 0]);
             const [toast, setToast] = useState('');
             const [placedCount, setPlacedCount] = useState(0);
             const [level, setLevel] = useState(1);
-            const [hoveredId, setHoveredId] = useState(null);
-            const [draggingId, setDraggingId] = useState(null);
-            const [dragPosition, setDragPositionState] = useState(null);
-            const [dragValid, setDragValid] = useState(false);
-            const [replaceShape, setReplaceShape] = useState(SHAPES[0].id);
             const screenshotRef = useRef(null);
             const objectiveTarget = level * 8;
 
@@ -385,11 +385,6 @@
                 const timer = setTimeout(() => setToast(''), 1700);
                 return () => clearTimeout(timer);
             }, [toast]);
-
-            useEffect(() => {
-                const selected = bricks.find((b) => b.id === selectedId);
-                if (selected) setReplaceShape(selected.shape);
-            }, [selectedId, bricks]);
 
             useEffect(() => {
                 let raf;
@@ -425,8 +420,6 @@
             }, []);
 
             const showToast = (message) => setToast(message);
-            const previewCandidate = hover ? { id: 'preview', position: hover, rotation, color: activeColor, material: activeMaterial, shape: activeShape } : null;
-            const previewValid = previewCandidate ? isWithinBuildBounds(previewCandidate.position) && !collides(bricks, previewCandidate) : false;
 
             const commit = (nextBricks, action = 'edit') => {
                 const snap = snapshot(nextBricks);
@@ -607,8 +600,8 @@
 
             const app = useMemo(() => ({
                 bricks, hover, setHover, mode, rotation, activeColor, activeMaterial,
-                selectedId, setSelectedId, physics, soundEnabled, setCameraDirection, activeShape, hoveredId, draggingId, dragPosition, dragValid,
-                commit, showToast, setHoveredId, startDrag, setDragPosition, finishDrag, previewValid, cameraTarget,
+                selectedId, setSelectedId, physics, soundEnabled, setCameraDirection, activeShape,
+                commit, showToast,
                 setScreenshotExporter: (fn) => { screenshotRef.current = fn; }
             }), [bricks, hover, mode, rotation, activeColor, activeMaterial, selectedId, physics, soundEnabled, activeShape, hoveredId, draggingId, dragPosition, dragValid, previewValid, cameraTarget]);
 
@@ -626,7 +619,6 @@
                                     <p>👆 <b>Tap to place</b> on highlighted grid cells.</p>
                                     <p>✋ <b>Drag a selected block</b> in Move mode to reposition it live.</p>
                                     <p>🧭 Pick <b>Build / Move / Delete</b> from the top toolbar.</p>
-                                    <p>🔎 <b>Select a block</b> to reveal Delete, Rotate, and Replace controls.</p>
                                     <p>🎯 Goal: place <b>{objectiveTarget} bricks</b> to level up.</p>
                                 </div>
                                 <button className={`mt-4 w-full ${MIN_TOUCH} rounded-xl bg-blue-600 text-white font-semibold`} onClick={() => setShowOnboarding(false)}>Start Building</button>
@@ -692,26 +684,6 @@
                             </div>
                         </div>
                     </div>
-
-                    {selectedId && (
-                        <div className="absolute top-[190px] right-3 z-30 pointer-events-none">
-                            <div className="pointer-events-auto rounded-xl bg-white/95 border border-slate-200 shadow-lg p-3 w-[250px]">
-                                <div className="font-semibold text-sm text-slate-800 mb-2">Selected Block Actions</div>
-                                <div className="flex flex-wrap gap-2 mb-2">
-                                    <UIButton label="Delete" icon={Icons.Delete} onClick={deleteSelected} tone="primary" />
-                                    <UIButton label="Rot -90°" icon={Icons.RotateL} onClick={() => rotateSelected(-1)} />
-                                    <UIButton label="Rot +90°" icon={Icons.RotateR} onClick={() => rotateSelected(1)} />
-                                </div>
-                                <div className="text-xs font-semibold text-slate-600 mb-1">Replace With</div>
-                                <div className="flex flex-wrap gap-2">
-                                    {SHAPES.map((shape) => (
-                                        <UIButton key={`replace-${shape.id}`} label={shape.label} active={replaceShape === shape.id} onClick={() => setReplaceShape(shape.id)} />
-                                    ))}
-                                    <UIButton label="Replace" icon={Icons.Replace} tone="primary" onClick={replaceSelected} />
-                                </div>
-                            </div>
-                        </div>
-                    )}
 
                     {toast && (
                         <div className="absolute left-1/2 -translate-x-1/2 bottom-[26vh] z-40 pointer-events-none">

@@ -1,700 +1,850 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>BrickBuilder 3D</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    
-    <style>
-        html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #0f172a; }
-        #root { width: 100%; height: 100%; }
-        canvas { touch-action: none; }
-        .safe-scroll::-webkit-scrollbar { display: none; }
-    </style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>BrickBuilder Kids – Fun Edition</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.2.0",
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+        "three": "https://esm.sh/three@0.154.0",
+        "@react-three/fiber": "https://esm.sh/@react-three/fiber@8.13.0?external=react,react-dom,three",
+        "@react-three/drei": "https://esm.sh/@react-three/drei@9.74.0?external=react,react-dom,three,@react-three/fiber",
+        "three/examples/jsm/exporters/STLExporter.js": "https://esm.sh/three@0.154.0/examples/jsm/exporters/STLExporter.js",
+        "three/examples/jsm/exporters/OBJExporter.js": "https://esm.sh/three@0.154.0/examples/jsm/exporters/OBJExporter.js",
+        "three/examples/jsm/utils/BufferGeometryUtils.js": "https://esm.sh/three@0.154.0/examples/jsm/utils/BufferGeometryUtils.js"
+      }
+    }
+  </script>
+  <style>
+    html, body, #root {
+      margin: 0; width: 100%; height: 100%;
+      overflow: hidden; background: #0f172a;
+      font-family: Inter, system-ui, sans-serif;
+    }
+    canvas { touch-action: none; outline: none; }
+    .safe-inset { padding-bottom: env(safe-area-inset-bottom); }
+  </style>
 </head>
 <body>
-    <div id="root"></div>
+<div id="root"></div>
+<script type="text/babel" data-type="module">
+import React, {
+  useCallback, useEffect, useMemo, useRef, useState, Suspense
+} from 'react';
+import { createRoot } from 'react-dom/client';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
+import { Environment, OrbitControls, RoundedBox } from '@react-three/drei';
+import * as THREE from 'three';
+import { STLExporter } from 'three/examples/jsm/exporters/STLExporter.js';
+import { OBJExporter } from 'three/examples/jsm/exporters/OBJExporter.js';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
-    <script type="text/babel" data-type="module">
-        import React, { useEffect, useMemo, useRef, useState } from 'https://esm.sh/react@18.2.0';
-        import { createRoot } from 'https://esm.sh/react-dom@18.2.0/client';
-        import { Canvas, useThree, useFrame } from 'https://esm.sh/@react-three/fiber@8.13.0?deps=react@18.2.0,react-dom@18.2.0,three@0.154.0';
-        import { OrbitControls, RoundedBox, Environment } from 'https://esm.sh/@react-three/drei@9.74.0?deps=react@18.2.0,react-dom@18.2.0,three@0.154.0,@react-three/fiber@8.13.0';
-        import * as THREE from 'https://esm.sh/three@0.154.0';
-        import { STLExporter } from 'https://esm.sh/three@0.154.0/examples/jsm/exporters/STLExporter.js';
-        import { OBJExporter } from 'https://esm.sh/three@0.154.0/examples/jsm/exporters/OBJExporter.js';
-        import { mergeGeometries } from 'https://esm.sh/three@0.154.0/examples/jsm/utils/BufferGeometryUtils.js';
+const IS_DEV = (() => {
+  try { return typeof process !== 'undefined' && process.env?.NODE_ENV !== 'production'; }
+  catch(_) { return true; }
+})();
 
-        const GRID_SIZE = 24;
-        const MAX_BUILD_HEIGHT = 12;
-        const MIN_TOUCH = 'min-w-[44px] min-h-[44px]';
-        const MATERIAL_TYPES = ['plastic', 'wood', 'metal'];
-        const SHAPES = [
-            { id: 'single', label: '1x1', icon: '◼︎', cells: [[0, 0]] },
-            { id: 'rect2', label: '1x2', icon: '▭', cells: [[0, 0], [1, 0]] },
-            { id: 'square2', label: '2x2', icon: '▦', cells: [[0, 0], [1, 0], [0, 1], [1, 1]] },
-            { id: 'l3', label: 'L', icon: '◫', cells: [[0, 0], [1, 0], [0, 1]] }
-        ];
-        const STORAGE_KEY = 'lego-build-v2';
-        const PALETTE = ['#ef4444','#3b82f6','#eab308','#22c55e','#f8fafc','#475569','#0f172a','#db2777','#f97316','#a855f7','#78350f','#bae6fd'];
-        const createId = () => (crypto?.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2));
+const GRID_SIZE = 20;
+const SAVE_KEY  = 'lego-build-v2';
+const INTRO_KEY = 'lego-intro-seen-v1';
+const TWO_PI    = Math.PI * 2;
+const HALF_PI   = Math.PI / 2;
+const MAX_HISTORY = 120;
+const HISTORY_WARN = 100;
 
-        const Icons = {
-            Move: () => '✥', Build: () => '⬛', Delete: () => '🗑', Undo: () => '↶', Redo: () => '↷',
-            Save: () => '💾', Load: () => '📂', Shot: () => '📸', Punch: () => '👊', Start: () => '🚀',
-            RotateL: () => '↺', RotateR: () => '↻', Replace: () => '♻️', Recenter: () => '🎯'
-        };
+const PALETTE = [
+  '#ef4444','#f97316','#eab308','#84cc16',
+  '#22c55e','#06b6d4','#3b82f6','#a855f7',
+  '#ec4899','#ffffff','#1e293b','#78350f',
+];
 
-        let audioCtx = null;
-        let masterGain = null;
-        const impactBufferCache = {};
+const COLOR_NAMES = {
+  '#ef4444':'Red','#f97316':'Orange','#eab308':'Yellow','#84cc16':'Lime',
+  '#22c55e':'Green','#06b6d4':'Cyan','#3b82f6':'Blue','#a855f7':'Purple',
+  '#ec4899':'Pink','#ffffff':'White','#1e293b':'Dark Blue','#78350f':'Brown',
+};
 
-        const getAudio = () => {
-            const AC = window.AudioContext || window.webkitAudioContext;
-            if (!AC) return null;
-            if (!audioCtx) {
-                audioCtx = new AC();
-                masterGain = audioCtx.createGain();
-                masterGain.gain.value = 0.45;
-                masterGain.connect(audioCtx.destination);
-            }
-            return { ctx: audioCtx, out: masterGain };
-        };
+const BRICK_TYPES = [
+  { id:'1x1', label:'1x1', width:1, depth:1, emoji:'🔹' },
+  { id:'1x2', label:'1x2', width:1, depth:2, emoji:'▬'  },
+  { id:'2x2', label:'2x2', width:2, depth:2, emoji:'◼️' },
+  { id:'2x3', label:'2x3', width:2, depth:3, emoji:'▭'  },
+  { id:'2x4', label:'2x4', width:2, depth:4, emoji:'🧱' },
+];
+const BRICK_BY_ID = Object.fromEntries(BRICK_TYPES.map(t => [t.id, t]));
 
-        const getImpactBuffer = (ctx) => {
-            if (impactBufferCache[ctx.sampleRate]) return impactBufferCache[ctx.sampleRate];
-            const duration = 0.1;
-            const buffer = ctx.createBuffer(1, ctx.sampleRate * duration, ctx.sampleRate);
-            const data = buffer.getChannelData(0);
-            for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (data.length / 4));
-            impactBufferCache[ctx.sampleRate] = buffer;
-            return buffer;
-        };
+const getBrickType = (id) => {
+  const t = BRICK_BY_ID[id];
+  if (!t && IS_DEV) console.warn(`Unknown brick type: "${id}"`);
+  return t || BRICK_TYPES[0];
+};
 
-        const playImpactSound = (material, enabled, distanceFactor = 1) => {
-            if (!enabled) return;
-            const audio = getAudio();
-            if (!audio) return;
-            const { ctx, out } = audio;
-            if (ctx.state === 'suspended') ctx.resume();
+const generateId = () => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
+    return crypto.randomUUID();
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2,10)}`;
+};
 
-            const source = ctx.createBufferSource();
-            source.buffer = getImpactBuffer(ctx);
-            const filter = ctx.createBiquadFilter();
-            const gain = ctx.createGain();
-            const profile = {
-                plastic: { freq: 1300, q: 4, amp: 0.012 },
-                wood: { freq: 620, q: 1.5, amp: 0.017 },
-                metal: { freq: 2200, q: 8, amp: 0.01 }
-            }[material] || { freq: 1000, q: 3, amp: 0.012 };
+const makeRect = (w, h, d, x, y, z, color) => {
+  const out = [];
+  for (let i = 0; i < w; i++)
+    for (let j = 0; j < h; j++)
+      for (let k = 0; k < d; k++)
+        out.push({
+          position : [x+i, y+j, z+k],
+          color, rotation:0, type:'1x1',
+          damage:0, material:'plastic',
+        });
+  return out;
+};
 
-            const now = ctx.currentTime;
-            const duration = 0.1;
-            filter.type = 'bandpass';
-            filter.frequency.value = profile.freq;
-            filter.Q.value = profile.q;
-            gain.gain.value = profile.amp * Math.max(0.3, Math.min(1, 1 / distanceFactor));
-            gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+const PRESET_FACTORIES = {
+  'Empty Grid' : () => [],
+  'Cozy House' : () => [
+    ...makeRect(10,1,10,-5,0,-5,'#22c55e'),
+    ...makeRect(6,3,1,-3,1,-3,'#f8fafc'),
+    ...makeRect(6,3,1,-3,1, 2,'#f8fafc'),
+    ...makeRect(1,3,4,-3,1,-2,'#f8fafc'),
+    ...makeRect(1,3,4, 2,1,-2,'#f8fafc'),
+    ...makeRect(8,1,6,-4,4,-3,'#fbbf24'),
+  ],
+};
 
-            source.connect(filter);
-            filter.connect(gain);
-            gain.connect(out);
-            source.start(now);
-            source.stop(now + duration);
-        };
+const materialProfiles = {
+  plastic : { base:420, wobble:90,  decay:0.12 },
+  wood    : { base:220, wobble:50,  decay:0.16 },
+  metal   : { base:650, wobble:160, decay:0.20 },
+};
 
-        const getShape = (shapeId) => SHAPES.find((s) => s.id === shapeId) || SHAPES[0];
-        const toQuarterTurn = (rotation = 0) => ((Math.round(rotation / (Math.PI / 2)) % 4) + 4) % 4;
-        const rotateCell = ([x, z], turns) => {
-            if (turns === 1) return [z, -x];
-            if (turns === 2) return [-x, -z];
-            if (turns === 3) return [-z, x];
-            return [x, z];
-        };
-        const getOccupiedCells = (brick, anchor = brick.position, rotation = brick.rotation) => {
-            const shape = getShape(brick.shape);
-            const turns = toQuarterTurn(rotation);
-            return shape.cells.map((cell) => {
-                const [rx, rz] = rotateCell(cell, turns);
-                return [anchor[0] + rx, anchor[1], anchor[2] + rz];
-            });
-        };
-        const collides = (existingBricks, candidate, ignoreId = null) => {
-            const occupied = new Set();
-            existingBricks.forEach((b) => {
-                if (ignoreId && b.id === ignoreId) return;
-                getOccupiedCells(b).forEach((c) => occupied.add(c.join(',')));
-            });
-            return getOccupiedCells(candidate).some((c) => occupied.has(c.join(',')));
-        };
+let sharedAudioCtx = null;
+let audioCtxCreationAttempts = 0;
+const MAX_AUDIO_CTX = 4;
+const getAudioContext = () => {
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) return null;
+  if (!sharedAudioCtx || sharedAudioCtx.state === 'closed') {
+    if (audioCtxCreationAttempts >= MAX_AUDIO_CTX) return null;
+    try {
+      sharedAudioCtx = new Ctx();
+      audioCtxCreationAttempts++;
+    } catch (_) { return null; }
+  }
+  if (['suspended','interrupted'].includes(sharedAudioCtx.state))
+    sharedAudioCtx.resume().catch(() => {});
+  return sharedAudioCtx;
+};
 
-        const UIButton = ({ label, onClick, active, icon, disabled, tone = 'secondary' }) => (
+const playSound = (kind, enabled=true, profile='plastic', distanceFactor=1) => {
+  if (!enabled) return;
+  try {
+    const ctx = getAudioContext();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const vol = Math.max(0.015, 0.04 * distanceFactor);
+    const p   = materialProfiles[profile] || materialProfiles.plastic;
+    const dur = kind === 'punch' ? 0.2 : p.decay;
+
+    const bufLen = Math.floor(ctx.sampleRate * 0.08);
+    const buf    = ctx.createBuffer(1, bufLen, ctx.sampleRate);
+    const data   = buf.getChannelData(0);
+    for (let i = 0; i < bufLen; i++) data[i] = (Math.random()*2-1)*(1-i/bufLen);
+
+    const src    = ctx.createBufferSource();
+    src.buffer   = buf;
+    const filter = ctx.createBiquadFilter();
+    const gain   = ctx.createGain();
+    src.connect(filter); filter.connect(gain); gain.connect(ctx.destination);
+
+    filter.type            = 'bandpass';
+    filter.frequency.value = p.base + Math.random()*p.wobble;
+    gain.gain.setValueAtTime(vol, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now+dur);
+    src.start(now);
+    src.stop(now+dur);
+  } catch(_) {}
+};
+
+const isWithinGrid = (position, brickTypeId, rotation=0) => {
+  const t       = getBrickType(brickTypeId);
+  const turns   = ((Math.round(rotation/HALF_PI) % 4) + 4) % 4;
+  const rotated = turns % 2 === 1;
+  const w = rotated ? t.depth : t.width;
+  const d = rotated ? t.width : t.depth;
+  const [x,,z] = position;
+  return (
+    x >= -GRID_SIZE && z >= -GRID_SIZE && position[1] >= 0 &&
+    x+w-1 <= GRID_SIZE && z+d-1 <= GRID_SIZE
+  );
+};
+
+const getFootprintCells = (brick) => {
+  const t       = getBrickType(brick.type);
+  const turns   = ((Math.round((brick.rotation||0)/HALF_PI) % 4) + 4) % 4;
+  const rotated = turns % 2 === 1;
+  const w = rotated ? t.depth : t.width;
+  const d = rotated ? t.width : t.depth;
+  const [x,y,z] = brick.position;
+  const cells = [];
+  for (let i = 0; i < w; i++)
+    for (let j = 0; j < d; j++)
+      cells.push(`${x+i},${y},${z+j}`);
+  return cells;
+};
+
+const buildOccupiedSet = (bricks, ignoreId=null) => {
+  const set = new Set();
+  for (const b of bricks) {
+    if (ignoreId && b.id === ignoreId) continue;
+    getFootprintCells(b).forEach(c => set.add(c));
+  }
+  return set;
+};
+
+const canPlaceBrick = (occupied, draft) => {
+  if (!isWithinGrid(draft.position, draft.type, draft.rotation||0)) return false;
+  return getFootprintCells(draft).every(c => !occupied.has(c));
+};
+
+const isValidBrick = (b) =>
+  b &&
+  Array.isArray(b.position) && b.position.length === 3 &&
+  b.position.every(n => typeof n === 'number') &&
+  typeof b.color  === 'string' &&
+  typeof b.type   === 'string';
+
+const hydrateBrick = (b) => ({
+  ...b,
+  id       : generateId(),
+  type     : b.type     || '1x1',
+  rotation : b.rotation || 0,
+  damage   : b.damage   || 0,
+  material : b.material || 'plastic',
+});
+
+const loadFromStorage = () => {
+  try {
+    const raw = localStorage.getItem(SAVE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed.bricks)) return null;
+    const valid   = parsed.bricks.filter(isValidBrick);
+    const dropped = parsed.bricks.length - valid.length;
+    return { bricks: valid.map(hydrateBrick), dropped };
+  } catch(_) { return null; }
+};
+
+const downloadFile = (content, filename, mime='text/plain') => {
+  const blob = content instanceof Blob ? content : new Blob([content], { type:mime });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+};
+
+const Y_AXIS = new THREE.Vector3(0, 1, 0);
+
+const buildMergedGeometry = (bricks) => {
+  const geometries = [];
+  bricks.forEach(brick => {
+    const t    = getBrickType(brick.type);
+    const base = new THREE.BoxGeometry(t.width, 1, t.depth);
+    const mat  = new THREE.Matrix4().makeRotationY(brick.rotation||0);
+    mat.setPosition(new THREE.Vector3(
+      brick.position[0], brick.position[1]+0.5, brick.position[2]
+    ));
+    base.applyMatrix4(mat);
+    geometries.push(base);
+
+    for (let x = 0; x < t.width; x++) {
+      for (let z = 0; z < t.depth; z++) {
+        const stud  = new THREE.CylinderGeometry(0.22,0.22,0.16,16);
+        const local = new THREE.Vector3(
+          x-(t.width-1)/2, 1.08, z-(t.depth-1)/2
+        ).applyAxisAngle(Y_AXIS, brick.rotation||0);
+        stud.applyMatrix4(new THREE.Matrix4().setPosition(
+          brick.position[0]+local.x,
+          brick.position[1]+local.y,
+          brick.position[2]+local.z,
+        ));
+        geometries.push(stud);
+      }
+    }
+  });
+  if (!geometries.length) return null;
+  const merged = mergeGeometries(geometries, true);
+  geometries.forEach(g => g.dispose());
+  return merged;
+};
+
+const useToast = () => {
+  const [queue,   setQueue  ] = useState([]);
+  const [current, setCurrent] = useState('');
+  const timerRef = useRef(null);
+
+  const push = useCallback((msg) => {
+    setQueue(q => [...q, msg]);
+  }, []);
+
+  useEffect(() => {
+    if (current || !queue.length) return;
+    const [next, ...rest] = queue;
+    setCurrent(next);
+    setQueue(rest);
+  }, [queue, current]);
+
+  useEffect(() => {
+    if (!current) return;
+    clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => setCurrent(''), 1800);
+    return () => clearTimeout(timerRef.current);
+  }, [current]);
+
+  return [current, push];
+};
+
+const BrickVisual = ({ brickType, color, rotation=0, transparent=false, damaged=0, ...events }) => {
+  const type  = getBrickType(brickType);
+  const studs = useMemo(() => {
+    const arr = [];
+    for (let x = 0; x < type.width; x++)
+      for (let z = 0; z < type.depth; z++)
+        arr.push([x-(type.width-1)/2, z-(type.depth-1)/2]);
+    return arr;
+  }, [type]);
+
+  return (
+    <group rotation={[0,rotation,0]}>
+      <RoundedBox
+        args={[type.width,1,type.depth]}
+        radius={0.08} smoothness={4}
+        castShadow receiveShadow
+        {...events}
+      >
+        <meshPhysicalMaterial
+          color={color}
+          roughness={Math.min(1, 0.28 + Math.min(damaged,4)*0.08)}
+          metalness={0.08} clearcoat={0.35}
+          transparent={transparent} opacity={transparent ? 0.55 : 1}
+        />
+      </RoundedBox>
+      {studs.map(([x,z]) => (
+        <mesh key={`${x}-${z}`} position={[x,0.58,z]} castShadow receiveShadow>
+          <cylinderGeometry args={[0.22,0.22,0.16,16]} />
+          <meshStandardMaterial color={color} roughness={0.35} metalness={0.05} />
+        </mesh>
+      ))}
+    </group>
+  );
+};
+
+const SceneContent = ({
+  bricks, mode, hoverPos, setHoverPos,
+  addBrick, removeBrick, moveBrick, commitMove,
+  activeColor, activeBrickType, rotation,
+  screenshotTrigger, onScreenshotTaken,
+  onCameraDirection, canPlaceCurrent,
+}) => {
+  const { gl, scene, camera } = useThree();
+  const [draggingId, setDraggingId] = useState(null);
+  const lastCamDir = useRef([0,0,0]);
+  const dirVec     = useRef(new THREE.Vector3());
+
+  useFrame(() => {
+    camera.getWorldDirection(dirVec.current);
+    const [px,py,pz] = lastCamDir.current;
+    const { x,y,z }  = dirVec.current;
+    if (Math.abs(x-px)>0.01 || Math.abs(y-py)>0.01 || Math.abs(z-pz)>0.01) {
+      lastCamDir.current = [x,y,z];
+      onCameraDirection([x,y,z]);
+    }
+  });
+
+  useEffect(() => {
+    if (!screenshotTrigger) return;
+    requestAnimationFrame(() => {
+      try {
+        const size   = gl.getSize(new THREE.Vector2());
+        const prevPR = gl.getPixelRatio();
+        gl.setPixelRatio(Math.min(window.devicePixelRatio*2, 3));
+        gl.setSize(size.x, size.y, false);
+        gl.render(scene, camera);
+        const url = gl.domElement.toDataURL('image/png');
+        const a   = document.createElement('a');
+        a.href = url; a.download = `lego-screenshot-${Date.now()}.png`;
+        a.click();
+        gl.setPixelRatio(prevPR);
+        gl.setSize(size.x, size.y, false);
+      } finally {
+        onScreenshotTaken();
+      }
+    });
+  }, [screenshotTrigger, gl, scene, camera, onScreenshotTaken]);
+
+  const updateHover = useCallback((e) => {
+    e.stopPropagation();
+    if (mode === 'delete') return setHoverPos(null);
+    const p = e.point;
+    if (mode === 'move' && draggingId) {
+      moveBrick(draggingId, [Math.round(p.x), Math.max(0,Math.round(p.y)), Math.round(p.z)]);
+      return;
+    }
+    let pos;
+    if (e.object.geometry.type === 'PlaneGeometry') {
+      pos = [Math.round(p.x), 0, Math.round(p.z)];
+    } else {
+      const n = e.face.normal;
+      pos = [
+        Math.round(p.x + n.x*0.5),
+        Math.max(0, Math.floor(p.y + n.y*0.5)),
+        Math.round(p.z + n.z*0.5),
+      ];
+    }
+    setHoverPos(pos);
+  }, [mode, draggingId, moveBrick, setHoverPos]);
+
+  const finishDrag = useCallback(() => {
+    setDraggingId(null);
+    if (mode === 'move') commitMove();
+  }, [mode, commitMove]);
+
+  return (
+    <>
+      <ambientLight intensity={0.72} />
+      <directionalLight
+        position={[8,14,7]} castShadow intensity={1.1}
+        shadow-mapSize={[1024,1024]}
+      />
+      <Suspense fallback={null}><Environment preset="park" blur={0.9} /></Suspense>
+
+      {bricks.map(brick => (
+        <group key={brick.id} position={brick.position}>
+          <BrickVisual
+            brickType={brick.type} color={brick.color}
+            damaged={brick.damage||0} rotation={brick.rotation}
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              if (mode === 'delete') removeBrick(brick.id);
+              if (mode === 'move')   setDraggingId(brick.id);
+            }}
+            onPointerUp={finishDrag}
+            onPointerMove={updateHover}
+          />
+        </group>
+      ))}
+
+      {mode === 'build' && hoverPos && (
+        <group position={hoverPos}>
+          <BrickVisual
+            brickType={activeBrickType}
+            color={canPlaceCurrent ? activeColor : '#ef4444'}
+            rotation={rotation} transparent
+          />
+        </group>
+      )}
+
+      <mesh
+        rotation={[-HALF_PI,0,0]} position={[0,-0.01,0]}
+        onPointerMove={updateHover}
+        onPointerUp={() => { setDraggingId(null); if(mode==='move') commitMove(); }}
+        onClick={(e) => {
+          e.stopPropagation();
+          if (mode !== 'build' || !hoverPos) return;
+          addBrick({ position:hoverPos, color:activeColor, rotation, type:activeBrickType });
+        }}
+        receiveShadow
+      >
+        <planeGeometry args={[50,50]} />
+        <meshStandardMaterial transparent opacity={0} />
+      </mesh>
+
+      <gridHelper args={[GRID_SIZE*2,GRID_SIZE*2,0x9ca3af,0xe5e7eb]} position={[0,0.01,0]} />
+      <OrbitControls makeDefault minPolarAngle={0} maxPolarAngle={HALF_PI-0.1} enableDamping dampingFactor={0.08} />
+    </>
+  );
+};
+
+function App() {
+  const [bricks,          setBricks         ] = useState([]);
+  const [hoverPos,        setHoverPos       ] = useState(null);
+  const [activeColor,     setActiveColor    ] = useState(PALETTE[0]);
+  const [activeBrickType, setActiveBrickType] = useState(BRICK_TYPES[0].id);
+  const [rotation,        setRotation       ] = useState(0);
+  const [mode,            setMode           ] = useState('build');
+  const [soundEnabled,    setSoundEnabled   ] = useState(true);
+  const [activeMaterial,  setActiveMaterial ] = useState('plastic');
+  const [screenshotTrigger, setScreenshotTrigger] = useState(false);
+  const [showIntro,       setShowIntro      ] = useState(localStorage.getItem(INTRO_KEY) !== '1');
+  const [history,         setHistory        ] = useState([[]]);
+  const [future,          setFuture         ] = useState([]);
+  const [cameraDirection, setCameraDirection] = useState([0.7,0.15,0.6]);
+  const [toast,           pushToast         ] = useToast();
+
+  const historyRef = useRef(history);
+  useEffect(() => { historyRef.current = history; }, [history]);
+
+  const warnedHistoryRef = useRef(false);
+  useEffect(() => {
+    if (history.length >= HISTORY_WARN && !warnedHistoryRef.current) {
+      warnedHistoryRef.current = true;
+      pushToast('Undo history is nearly full (100 actions).');
+    }
+    if (history.length < HISTORY_WARN) warnedHistoryRef.current = false;
+  }, [history.length, pushToast]);
+
+  const bricksRef = useRef([]);
+  const syncBricks = useCallback((next) => {
+    bricksRef.current = next;
+    setBricks(next);
+  }, []);
+
+  const occupiedSet = useMemo(() => buildOccupiedSet(bricks), [bricks]);
+
+  useEffect(() => {
+    const result = loadFromStorage();
+    if (result && result.bricks.length) {
+      syncBricks(result.bricks);
+      setHistory([result.bricks]);
+      if (result.dropped > 0)
+        pushToast(`${result.dropped} brick${result.dropped>1?'s':''} couldn't be loaded.`);
+    } else {
+      setHistory([[]]);
+    }
+  }, []);
+
+  const canPlaceCurrent = useMemo(() => {
+    if (!hoverPos || mode !== 'build') return true;
+    return canPlaceBrick(occupiedSet, { position:hoverPos, color:activeColor, rotation, type:activeBrickType });
+  }, [occupiedSet, hoverPos, mode, activeColor, rotation, activeBrickType]);
+
+  const objectiveProgress = Math.min(100, Math.round((bricks.length/12)*100));
+  const objectiveLabel    = bricks.length < 12
+    ? `Build to 12 bricks (${bricks.length}/12)`
+    : `Great job! Keep experimenting (${bricks.length} bricks)`;
+
+  const pushHistory = useCallback((snapshot) => {
+    setHistory(h => [...h, JSON.parse(JSON.stringify(snapshot))].slice(-MAX_HISTORY));
+    setFuture([]);
+  }, []);
+
+  const updateBricks = useCallback((next, soundKind=null) => {
+    syncBricks(next);
+    pushHistory(next);
+    if (soundKind) {
+      const distanceFactor = Math.max(0.35, Math.min(1, 5/Math.sqrt(next.length+1)));
+      playSound(soundKind, soundEnabled, activeMaterial, distanceFactor);
+    }
+  }, [syncBricks, pushHistory, soundEnabled, activeMaterial]);
+
+  const addBrick = useCallback((draft) => {
+    const occ = buildOccupiedSet(bricksRef.current);
+    if (!canPlaceBrick(occ, draft)) {
+      pushToast("Can't place there. Try another spot.");
+      return;
+    }
+    updateBricks(
+      [...bricksRef.current, { ...draft, id:generateId(), damage:0, material:activeMaterial }],
+      'snap'
+    );
+  }, [updateBricks, activeMaterial, pushToast]);
+
+  const removeBrick = useCallback((id) => {
+    updateBricks(bricksRef.current.filter(b => b.id !== id), 'delete');
+  }, [updateBricks]);
+
+  const moveBrick = useCallback((id, position) => {
+    setBricks(prev => {
+      const target = prev.find(b => b.id === id);
+      if (!target) return prev;
+      const draft = { ...target, position };
+      const occ   = buildOccupiedSet(prev, id);
+      if (!canPlaceBrick(occ, draft)) return prev;
+      const next = prev.map(b => b.id === id ? draft : b);
+      bricksRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const commitMove = useCallback(() => {
+    pushHistory(bricksRef.current);
+  }, [pushHistory]);
+
+  const undo = useCallback(() => {
+    const currentHistory = historyRef.current;
+    if (currentHistory.length <= 1) return;
+    const prevState    = currentHistory[currentHistory.length - 2];
+    const currentState = currentHistory[currentHistory.length - 1];
+    setHistory(currentHistory.slice(0, -1));
+    setFuture(f => [currentState, ...f]);
+    syncBricks(prevState);
+  }, [syncBricks]);
+
+  const redo = useCallback(() => {
+    const currentFuture = future;
+    if (!currentFuture.length) return;
+    const [nextState, ...rest] = currentFuture;
+    setHistory(h => [...h, nextState]);
+    setFuture(rest);
+    syncBricks(nextState);
+  }, [future, syncBricks]);
+
+  const punchAll = useCallback(() => {
+    const cam    = new THREE.Vector3(...cameraDirection).normalize();
+    const kicked = bricksRef.current.map(b => {
+      const c   = new THREE.Vector3(...b.position).normalize();
+      const dir = cam.clone().multiplyScalar(-0.65).add(c.multiplyScalar(0.35)).normalize();
+      const intensity = 0.7 + (b.damage||0)*0.25;
+      return {
+        ...b,
+        position: [
+          Math.min(GRID_SIZE, Math.max(-GRID_SIZE, Math.round(b.position[0]+dir.x*intensity+(Math.random()-0.5)*1.2))),
+          Math.max(0,          Math.round(b.position[1]+Math.random()*1.4)),
+          Math.min(GRID_SIZE, Math.max(-GRID_SIZE, Math.round(b.position[2]+dir.z*intensity+(Math.random()-0.5)*1.2))),
+        ],
+        rotation : ((b.rotation||0)+(Math.random()-0.5)*0.6) % TWO_PI,
+        damage   : (b.damage||0)+1,
+      };
+    });
+    updateBricks(kicked, 'punch');
+  }, [cameraDirection, updateBricks]);
+
+  const handleRotate = useCallback(() => {
+    setRotation(r => (r + HALF_PI) % TWO_PI);
+  }, []);
+
+  const saveProject = useCallback(() => {
+    const payload = { bricks: bricksRef.current, savedAt: new Date().toISOString(), version: 2 };
+    localStorage.setItem(SAVE_KEY, JSON.stringify(payload));
+    downloadFile(JSON.stringify(payload, null, 2), 'lego-project.json', 'application/json');
+    pushToast('Project saved!');
+  }, [pushToast]);
+
+  const reloadProject = useCallback(() => {
+    const result = loadFromStorage();
+    if (!result) { pushToast('No valid save found on this device.'); return; }
+    syncBricks(result.bricks);
+    setHistory([result.bricks]);
+    setFuture([]);
+    pushToast(
+      result.dropped > 0
+        ? `Reloaded. ${result.dropped} brick${result.dropped>1?'s':''} skipped.`
+        : 'Project reloaded.'
+    );
+  }, [syncBricks, pushToast]);
+
+  const loadPreset = useCallback((name) => {
+    const factory = PRESET_FACTORIES[name];
+    if (!factory) return;
+    const next = factory().map(b => ({ ...b, id:generateId() }));
+    updateBricks(next, next.length ? 'snap' : null);
+    pushToast(name === 'Empty Grid' ? 'Grid cleared.' : `${name} loaded.`);
+  }, [updateBricks, pushToast]);
+
+  const exportMesh = useCallback((format) => {
+    const geometry = buildMergedGeometry(bricks);
+    if (!geometry) { pushToast('Nothing to export yet. Add bricks first!'); return; }
+    geometry.computeVertexNormals();
+    const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial());
+    try {
+      if (format === 'stl') {
+        const data = new STLExporter().parse(mesh, { binary: true });
+        downloadFile(new Blob([data], { type: 'model/stl' }), `lego-build-${Date.now()}.stl`);
+      } else {
+        downloadFile(new OBJExporter().parse(mesh), `lego-build-${Date.now()}.obj`, 'text/plain');
+      }
+    } finally {
+      geometry.dispose();
+      mesh.material.dispose();
+    }
+  }, [bricks, pushToast]);
+
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+      if ((e.metaKey||e.ctrlKey) && e.key==='z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
+      if (e.key==='r'||e.key==='R') handleRotate();
+      if (e.key==='1') setMode('build');
+      if (e.key==='2') setMode('move');
+      if (e.key==='3') setMode('delete');
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [undo, redo, handleRotate]);
+
+  const introRef = useRef(null);
+  useEffect(() => {
+    if (!showIntro) return;
+    const container = introRef.current;
+    if (!container) return;
+    const focusable = container.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+    const first = focusable[0];
+    const last  = focusable[focusable.length-1];
+    const handleKeyDown = (e) => {
+      if (e.key !== 'Tab') return;
+      if (e.shiftKey) {
+        if (document.activeElement === first) { e.preventDefault(); last.focus(); }
+      } else {
+        if (document.activeElement === last) { e.preventDefault(); first.focus(); }
+      }
+    };
+    container.addEventListener('keydown', handleKeyDown);
+    return () => container.removeEventListener('keydown', handleKeyDown);
+  }, [showIntro]);
+
+  const ModeButton = ({ modeValue, label }) => (
+    <button
+      className={`min-h-[44px] px-3 rounded-xl ${mode===modeValue?'bg-blue-600 text-white':'bg-slate-100'}`}
+      onClick={() => setMode(modeValue)}
+      aria-pressed={mode===modeValue}
+    >{label}</button>
+  );
+
+  return (
+    <div className="w-full h-full relative overflow-hidden bg-slate-100 text-slate-800">
+      <Canvas
+        shadows
+        dpr={[1, Math.min(2, window.devicePixelRatio||1.5)]}
+        gl={{ preserveDrawingBuffer:true }}
+        camera={{ position:[8,8,8], fov:45 }}
+      >
+        <SceneContent
+          bricks={bricks} mode={mode}
+          hoverPos={hoverPos} setHoverPos={setHoverPos}
+          addBrick={addBrick} removeBrick={removeBrick}
+          moveBrick={moveBrick} commitMove={commitMove}
+          activeColor={activeColor} activeBrickType={activeBrickType}
+          rotation={rotation}
+          screenshotTrigger={screenshotTrigger}
+          onScreenshotTaken={() => setScreenshotTrigger(false)}
+          onCameraDirection={setCameraDirection}
+          canPlaceCurrent={canPlaceCurrent}
+        />
+      </Canvas>
+
+      {showIntro && (
+        <div
+          className="absolute inset-0 z-50 bg-slate-950/70 flex items-center justify-center p-4"
+          role="dialog" aria-modal="true" aria-labelledby="intro-title"
+          ref={introRef}
+        >
+          <div className="w-full max-w-md rounded-3xl bg-white p-5 shadow-2xl">
+            <h2 id="intro-title" className="text-2xl font-black">Start Building in 3 seconds</h2>
+            <ul className="mt-3 space-y-2 text-sm">
+              <li>👆 <strong>Tap to place</strong> a brick where the ghost appears.</li>
+              <li>🖐️ <strong>Move mode + drag</strong> to reposition a brick.</li>
+              <li>🧭 <strong>Drag background</strong> to orbit camera.</li>
+              <li>⌨️ <strong>R</strong> rotate · <strong>1/2/3</strong> modes · <strong>Ctrl+Z</strong> undo</li>
+            </ul>
             <button
-                onClick={onClick}
-                disabled={disabled}
-                className={`${MIN_TOUCH} px-3 py-2 rounded-xl text-sm font-semibold border transition-all duration-150 ${tone === 'primary' ? 'shadow-sm' : ''} ${active ? 'bg-blue-600 text-white border-blue-500 -translate-y-[1px] shadow-md' : tone === 'primary' ? 'bg-slate-100 text-slate-800 border-slate-300' : 'bg-white/95 text-slate-700 border-slate-200'} ${disabled ? 'opacity-50 cursor-not-allowed' : 'hover:-translate-y-[1px] active:translate-y-[1px]'}`}
-                title={label}
-            >
-                <span className="inline-flex items-center gap-2"><span>{icon ? icon() : ''}</span>{label}</span>
-            </button>
-        );
+              ref={(el) => { if (el) el.focus(); }}
+              className="mt-4 w-full min-h-[48px] rounded-2xl bg-blue-600 text-white font-bold focus:outline-none focus:ring-4 focus:ring-blue-300"
+              onClick={() => { localStorage.setItem(INTRO_KEY,'1'); setShowIntro(false); }}
+            >🚀 Start Building</button>
+          </div>
+        </div>
+      )}
 
-        const Brick = ({ brick, onPointerDown, onPointerMove, onPointerUp, onPointerOut, dynamic, selected, hovered }) => {
-            const shade = Math.max(0.55, 1 - (dynamic?.damage || 0) * 0.07);
-            const color = new THREE.Color(brick.color).multiplyScalar(shade).getStyle();
-            const emissive = selected ? '#60a5fa' : hovered ? '#22c55e' : '#000000';
-            const emissiveIntensity = selected ? 0.45 : hovered ? 0.2 : 0;
-            return (
-                <group position={[brick.position[0] + (dynamic?.offset?.x || 0), brick.position[1] + (dynamic?.offset?.y || 0), brick.position[2] + (dynamic?.offset?.z || 0)]} rotation={[dynamic?.tilt?.x || 0, brick.rotation + (dynamic?.tilt?.y || 0), dynamic?.tilt?.z || 0]}>
-                    {getShape(brick.shape).cells.map(([x, z], i) => (
-                        <group key={`${brick.id}-${i}`} position={[x, 0, z]}>
-                            <RoundedBox args={[1,1,1]} radius={0.05} smoothness={4} position={[0,0.5,0]} castShadow receiveShadow onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerOut={onPointerOut}>
-                                <meshPhysicalMaterial color={color} roughness={0.22} clearcoat={0.45} emissive={emissive} emissiveIntensity={emissiveIntensity} />
-                            </RoundedBox>
-                            <mesh position={[0,1.1,0]} castShadow receiveShadow onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerOut={onPointerOut}>
-                                <cylinderGeometry args={[0.35,0.35,0.2,20]} />
-                                <meshPhysicalMaterial color={color} roughness={0.24} clearcoat={0.5} emissive={emissive} emissiveIntensity={emissiveIntensity} />
-                            </mesh>
-                        </group>
-                    ))}
-                </group>
-            );
-        };
+      <div className="absolute top-2 left-2 right-2 z-30 pointer-events-none">
+        <div className="pointer-events-auto bg-white/95 backdrop-blur rounded-2xl shadow px-2 py-2 flex flex-wrap gap-2 items-center justify-center md:justify-start max-h-[44vh] overflow-y-auto">
+          <ModeButton modeValue="build" label="Build" />
+          <ModeButton modeValue="move" label="Move" />
+          <ModeButton modeValue="delete" label="Delete" />
 
-        const snapshot = (bricks) => bricks.map((b) => ({ ...b, position: [...b.position] }));
-        const isWithinBuildBounds = (position) => {
-            if (!position) return false;
-            const [x, y, z] = position;
-            return Math.abs(x) <= GRID_SIZE && Math.abs(z) <= GRID_SIZE && y >= 0 && y <= MAX_BUILD_HEIGHT;
-        };
+          <button className="min-h-[44px] px-3 rounded-xl bg-slate-100"  onClick={handleRotate}                   aria-label="Rotate brick 90°">Rotate</button>
+          <button className="min-h-[44px] px-3 rounded-xl bg-slate-100"  onClick={undo}                           aria-label="Undo last action">Undo</button>
+          <button className="min-h-[44px] px-3 rounded-xl bg-slate-100"  onClick={redo}                           aria-label="Redo last action">Redo</button>
+          <button className="min-h-[44px] px-3 rounded-xl bg-orange-100" onClick={punchAll}                       aria-label="Punch all bricks">Punch All</button>
+          <button className="min-h-[44px] px-3 rounded-xl bg-slate-100"  onClick={() => setScreenshotTrigger(true)}>Screenshot</button>
+          <button className="min-h-[44px] px-3 rounded-xl bg-slate-100"  onClick={() => exportMesh('stl')}>Export STL</button>
+          <button className="min-h-[44px] px-3 rounded-xl bg-slate-100"  onClick={() => exportMesh('obj')}>Export OBJ</button>
+          <button className="min-h-[44px] px-3 rounded-xl bg-slate-100"  onClick={saveProject}>Save JSON</button>
+          <button className="min-h-[44px] px-3 rounded-xl bg-slate-100"  onClick={reloadProject}>Reload Save</button>
+          <button className="min-h-[44px] px-3 rounded-xl bg-slate-100"  onClick={() => loadPreset('Cozy House')}>Load Preset</button>
+          <button className="min-h-[44px] px-3 rounded-xl bg-red-100"    onClick={() => loadPreset('Empty Grid')}>Clear</button>
 
-        const buildMergedGeometry = (bricks) => {
-            const all = [];
-            bricks.forEach((b) => {
-                const transform = new THREE.Matrix4();
-                const position = new THREE.Vector3(b.position[0], b.position[1], b.position[2]);
-                const quat = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, b.rotation || 0, 0));
-                transform.compose(position, quat, new THREE.Vector3(1, 1, 1));
+          <label className="min-h-[44px] px-3 rounded-xl bg-slate-100 flex items-center gap-2">
+            Material
+            <select className="rounded-lg bg-white px-2 py-1" value={activeMaterial} onChange={e => setActiveMaterial(e.target.value)}>
+              <option value="plastic">Plastic</option>
+              <option value="wood">Wood</option>
+              <option value="metal">Metal</option>
+            </select>
+          </label>
+          <label className="min-h-[44px] px-3 rounded-xl bg-slate-100 flex items-center gap-2">
+            <input type="checkbox" checked={soundEnabled} onChange={e => setSoundEnabled(e.target.checked)} aria-label="Toggle sound" />
+            Sound
+          </label>
+        </div>
+      </div>
 
-                getShape(b.shape).cells.forEach(([x, z]) => {
-                    const box = new THREE.BoxGeometry(1, 1, 1).toNonIndexed();
-                    box.translate(x, 0.5, z);
-                    box.applyMatrix4(transform);
-                    all.push(box);
+      <div
+        className="absolute left-2 bottom-[124px] z-30 pointer-events-none max-w-xs"
+        role="status" aria-live="polite" aria-atomic="false"
+      >
+        <div className="pointer-events-auto bg-slate-900/90 text-white rounded-2xl p-3 shadow-lg">
+          <p className="text-xs uppercase tracking-wide text-slate-300">Objective</p>
+          <p className="text-sm font-semibold">{objectiveLabel}</p>
+          <div className="mt-2 h-2 rounded-full bg-slate-700 overflow-hidden">
+            <div
+              className="h-full bg-emerald-400 transition-all"
+              style={{ width:`${objectiveProgress}%` }}
+              role="progressbar"
+              aria-valuenow={objectiveProgress}
+              aria-valuemin={0} aria-valuemax={100}
+              aria-label="Build progress"
+            />
+          </div>
+          <p className="mt-2 text-xs text-slate-200">
+            Mode: <strong>{mode}</strong>
+            {mode==='build' && !canPlaceCurrent ? ' • blocked position' : ''}
+          </p>
+          {!!toast && <p className="mt-1 text-xs text-amber-300">{toast}</p>}
+        </div>
+      </div>
 
-                    const stud = new THREE.CylinderGeometry(0.35, 0.35, 0.2, 24).toNonIndexed();
-                    stud.translate(x, 1.1, z);
-                    stud.applyMatrix4(transform);
-                    all.push(stud);
-                });
-            });
-            if (!all.length) return null;
-            const merged = mergeGeometries(all, false);
-            merged.computeVertexNormals();
-            return merged;
-        };
+      <div className="absolute bottom-2 left-2 right-2 z-30 pointer-events-none safe-inset">
+        <div
+          className="pointer-events-auto bg-white/95 backdrop-blur rounded-2xl shadow p-2 grid grid-cols-6 sm:grid-cols-8 md:grid-cols-12 gap-2"
+          role="group" aria-label="Colour palette"
+        >
+          {PALETTE.map(c => (
+            <button
+              key={c}
+              className={`w-full min-h-[44px] rounded-xl ring-1 ring-slate-400 border-2 ${activeColor===c?'border-black':'border-transparent'}`}
+              style={{ backgroundColor:c }}
+              onClick={() => setActiveColor(c)}
+              aria-label={`Select colour ${COLOR_NAMES[c] || c}`}
+              aria-pressed={activeColor===c}
+            />
+          ))}
+        </div>
 
-        function Scene({ app }) {
-            const { gl, scene, camera } = useThree();
-            const controlsRef = useRef(null);
+        <div
+          className="pointer-events-auto mt-2 bg-white/95 backdrop-blur rounded-2xl shadow p-2 grid grid-cols-3 sm:grid-cols-5 gap-2"
+          role="group" aria-label="Brick type"
+        >
+          {BRICK_TYPES.map(t => (
+            <button
+              key={t.id}
+              onClick={() => setActiveBrickType(t.id)}
+              className={`w-full min-h-[44px] rounded-xl px-2 ${activeBrickType===t.id?'bg-blue-600 text-white':'bg-slate-100'}`}
+              aria-pressed={activeBrickType===t.id}
+            >{t.emoji} {t.label}</button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
 
-            useEffect(() => {
-                app.setScreenshotExporter(() => {
-                    gl.render(scene, camera);
-                    const source = gl.domElement;
-                    const scale = Math.max(2, Math.ceil(window.devicePixelRatio || 1));
-                    const out = document.createElement('canvas');
-                    out.width = source.width * scale;
-                    out.height = source.height * scale;
-                    const ctx = out.getContext('2d');
-                    ctx.drawImage(source, 0, 0, out.width, out.height);
-                    const link = document.createElement('a');
-                    link.href = out.toDataURL('image/png');
-                    link.download = 'brickbuilder-screenshot.png';
-                    link.click();
-                });
-            }, [gl, scene, camera]);
-
-            useFrame(() => {
-                const dir = new THREE.Vector3();
-                camera.getWorldDirection(dir);
-                app.setCameraDirection([dir.x, dir.y, dir.z]);
-                if (controlsRef.current) {
-                    const [tx, ty, tz] = app.cameraTarget;
-                    controlsRef.current.target.lerp(new THREE.Vector3(tx, ty, tz), 0.15);
-                    controlsRef.current.update();
-                }
-            });
-
-            const getSnapPosition = (e, baseY = 0) => {
-                const p = e.point;
-                if (e.object.geometry?.type === 'PlaneGeometry') return [Math.round(p.x), baseY, Math.round(p.z)];
-                const n = e.face.normal;
-                if (n.y > 0.4) return [Math.round(p.x), Math.floor(p.y + 0.6), Math.round(p.z)];
-                if (n.y < -0.4) return [Math.round(p.x), Math.max(0, Math.floor(p.y - 0.6)), Math.round(p.z)];
-                return [Math.round(p.x + n.x * 0.5), Math.max(0, Math.floor(p.y)), Math.round(p.z + n.z * 0.5)];
-            };
-
-            const selectedBrick = app.bricks.find((b) => b.id === app.selectedId);
-
-            const handlePointerMove = (e) => {
-                const baseY = selectedBrick?.position?.[1] ?? 0;
-                const pos = getSnapPosition(e, baseY);
-                if (e.object.geometry?.type === 'PlaneGeometry') app.setHoveredId(null);
-                if (app.mode === 'delete') return app.setHover(null);
-                app.setHover(pos);
-
-                if (app.draggingId) {
-                    const moving = app.bricks.find((b) => b.id === app.draggingId);
-                    if (!moving) return;
-                    const candidate = { ...moving, position: pos };
-                    const valid = isWithinBuildBounds(candidate.position) && !collides(app.bricks, candidate, moving.id);
-                    app.setDragPosition(pos, valid);
-                }
-            };
-
-            const addAtHover = () => {
-                if (!app.hover) return;
-                const candidate = { id: createId(), position: [...app.hover], rotation: app.rotation, color: app.activeColor, material: app.activeMaterial, shape: app.activeShape };
-                if (!isWithinBuildBounds(candidate.position)) {
-                    app.showToast(`Stay within ±${GRID_SIZE} grid and height ${MAX_BUILD_HEIGHT}.`);
-                    return;
-                }
-                if (collides(app.bricks, candidate)) {
-                    app.showToast('That spot is occupied.');
-                    return;
-                }
-                const next = [...app.bricks, candidate];
-                app.commit(next, 'place');
-                playImpactSound(app.activeMaterial, app.soundEnabled);
-            };
-
-            const moveSelected = () => {
-                if (!app.selectedId || !app.hover) return;
-                const selected = app.bricks.find((b) => b.id === app.selectedId);
-                if (!selected) return;
-                const candidate = { ...selected, position: [...app.hover] };
-                if (!isWithinBuildBounds(candidate.position)) {
-                    app.showToast(`Cannot move outside build bounds.`);
-                    return;
-                }
-                if (collides(app.bricks, candidate, app.selectedId)) {
-                    app.showToast('Move blocked by another brick.');
-                    return;
-                }
-                const next = app.bricks.map((b) => b.id === app.selectedId ? candidate : b);
-                app.commit(next);
-                playImpactSound('wood', app.soundEnabled);
-            };
-
-            return (
-                <>
-                    <ambientLight intensity={0.65} />
-                    <directionalLight position={[10, 18, 8]} intensity={1.25} castShadow />
-                    <Environment preset="city" blur={0.7} />
-
-                    {app.bricks.map((brick) => {
-                        const renderBrick = app.draggingId === brick.id && app.dragPosition ? { ...brick, position: app.dragPosition } : brick;
-                        return (
-                        <Brick
-                            key={brick.id}
-                            brick={renderBrick}
-                            dynamic={app.physics[brick.id]}
-                            onPointerMove={(e) => { app.setHoveredId(brick.id); handlePointerMove(e); }}
-                            onPointerOut={() => app.setHoveredId(null)}
-                            onPointerUp={endDrag}
-                            hovered={app.hoveredId === brick.id}
-                            selected={app.selectedId === brick.id}
-                            onPointerDown={(e) => {
-                                e.stopPropagation();
-                                app.setSelectedId(brick.id);
-                                if (app.mode === 'delete') {
-                                    app.commit(app.bricks.filter((b) => b.id !== brick.id));
-                                    playImpactSound('metal', app.soundEnabled);
-                                } else if (app.mode === 'move') {
-                                    app.startDrag(brick.id, brick.position);
-                                } else {
-                                    handlePointerMove(e);
-                                    addAtHover();
-                                }
-                            }}
-                        />
-                    )})}
-
-                    {app.mode !== 'delete' && previewPosition && (
-                        <group position={previewPosition}>
-                            {selectedShapeCells.map(([x, z], i) => (
-                                <RoundedBox key={i} args={[1,1,1]} radius={0.05} smoothness={3} position={[x,0.5,z]}>
-                                    <meshStandardMaterial color={previewValid ? '#22c55e' : '#ef4444'} transparent opacity={0.38} emissive={previewValid ? '#16a34a' : '#ef4444'} emissiveIntensity={0.25} />
-                                </RoundedBox>
-                            ))}
-                        </group>
-                    )}
-
-                    <mesh rotation={[-Math.PI/2, 0, 0]} onPointerMove={handlePointerMove} onPointerUp={endDrag} onClick={(e) => { e.stopPropagation(); if (app.mode !== 'move') addAtHover(); }}>
-                        <planeGeometry args={[64, 64]} />
-                        <meshStandardMaterial transparent opacity={0} />
-                    </mesh>
-                    <gridHelper args={[GRID_SIZE * 2, GRID_SIZE * 2, 0x6b7280, 0x374151]} position={[0,0.01,0]} />
-                    <OrbitControls ref={controlsRef} makeDefault minPolarAngle={0.08} maxPolarAngle={Math.PI / 2 - 0.03} minDistance={4} maxDistance={65} enableDamping dampingFactor={0.08} />
-                </>
-            );
-        }
-
-        function App() {
-            const [bricks, setBricks] = useState([]);
-            const [history, setHistory] = useState([[]]);
-            const [historyIndex, setHistoryIndex] = useState(0);
-            const [hover, setHover] = useState(null);
-            const [mode, setMode] = useState('build');
-            const [rotation, setRotation] = useState(0);
-            const [activeColor, setActiveColor] = useState(PALETTE[0]);
-            const [activeShape, setActiveShape] = useState(SHAPES[0].id);
-            const [activeMaterial, setActiveMaterial] = useState('plastic');
-            const [soundEnabled, setSoundEnabled] = useState(true);
-            const [selectedId, setSelectedId] = useState(null);
-            const [showOnboarding, setShowOnboarding] = useState(true);
-            const [physics, setPhysics] = useState({});
-            const [cameraDirection, setCameraDirection] = useState([0.15, 0.3, -0.9]);
-            const [toast, setToast] = useState('');
-            const [placedCount, setPlacedCount] = useState(0);
-            const [level, setLevel] = useState(1);
-            const screenshotRef = useRef(null);
-            const objectiveTarget = level * 8;
-
-            useEffect(() => {
-                const saved = localStorage.getItem(STORAGE_KEY);
-                if (saved) {
-                    try {
-                        const parsed = JSON.parse(saved);
-                        if (Array.isArray(parsed.bricks)) {
-                            setBricks(parsed.bricks);
-                            setHistory([snapshot(parsed.bricks)]);
-                            setHistoryIndex(0);
-                        }
-                    } catch {}
-                }
-                const timer = setTimeout(() => setShowOnboarding(false), 3000);
-                return () => clearTimeout(timer);
-            }, []);
-
-            useEffect(() => {
-                if (!toast) return;
-                const timer = setTimeout(() => setToast(''), 1700);
-                return () => clearTimeout(timer);
-            }, [toast]);
-
-            useEffect(() => {
-                let raf;
-                const tick = () => {
-                    setPhysics((prev) => {
-                        const next = {};
-                        Object.entries(prev).forEach(([id, s]) => {
-                            const vy = s.vy - 0.006;
-                            const ox = s.offset.x + s.vx;
-                            const oy = Math.max(0, s.offset.y + vy);
-                            const oz = s.offset.z + s.vz;
-                            const damp = 0.94;
-                            const nvx = s.vx * damp;
-                            const nvy = oy === 0 ? -vy * 0.42 : vy;
-                            const nvz = s.vz * damp;
-                            if (Math.abs(nvx) + Math.abs(nvy) + Math.abs(nvz) > 0.002 || oy > 0.001) {
-                                next[id] = {
-                                    ...s,
-                                    vx: nvx,
-                                    vy: nvy,
-                                    vz: nvz,
-                                    offset: { x: ox, y: oy, z: oz },
-                                    tilt: { x: s.tilt.x + nvx * 0.2, y: s.tilt.y + nvz * 0.2, z: s.tilt.z + nvx * 0.15 }
-                                };
-                            }
-                        });
-                        return next;
-                    });
-                    raf = requestAnimationFrame(tick);
-                };
-                raf = requestAnimationFrame(tick);
-                return () => cancelAnimationFrame(raf);
-            }, []);
-
-            const showToast = (message) => setToast(message);
-
-            const commit = (nextBricks, action = 'edit') => {
-                const snap = snapshot(nextBricks);
-                const nextHistory = history.slice(0, historyIndex + 1);
-                nextHistory.push(snap);
-                setHistory(nextHistory);
-                setHistoryIndex(nextHistory.length - 1);
-                setBricks(snap);
-                setPhysics((prev) => Object.fromEntries(Object.entries(prev).filter(([id]) => snap.some((b) => b.id === id))));
-                if (action === 'place') {
-                    setPlacedCount((prev) => {
-                        const next = prev + 1;
-                        if (next >= objectiveTarget) {
-                            setLevel((current) => current + 1);
-                            setToast(`Level up! Now reach ${Math.min(999, (level + 1) * 8)} placements.`);
-                            return 0;
-                        }
-                        return next;
-                    });
-                }
-            };
-
-            const undo = () => {
-                if (historyIndex <= 0) return;
-                const i = historyIndex - 1;
-                setHistoryIndex(i);
-                setBricks(snapshot(history[i]));
-            };
-
-            const redo = () => {
-                if (historyIndex >= history.length - 1) return;
-                const i = historyIndex + 1;
-                setHistoryIndex(i);
-                setBricks(snapshot(history[i]));
-            };
-
-            const saveProject = () => {
-                const payload = { version: 1, savedAt: new Date().toISOString(), bricks: snapshot(bricks) };
-                localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
-                alert('Project saved locally.');
-            };
-
-            const reloadProject = () => {
-                const raw = localStorage.getItem(STORAGE_KEY);
-                if (!raw) return alert('No saved project found.');
-                try {
-                    const payload = JSON.parse(raw);
-                    if (!Array.isArray(payload.bricks)) return;
-                    setBricks(snapshot(payload.bricks));
-                    setHistory([snapshot(payload.bricks)]);
-                    setHistoryIndex(0);
-                } catch {}
-            };
-
-            const download = (name, body, type) => {
-                const blob = new Blob([body], { type });
-                const a = document.createElement('a');
-                a.href = URL.createObjectURL(blob);
-                a.download = name;
-                a.click();
-                URL.revokeObjectURL(a.href);
-            };
-
-            const exportMesh = (kind) => {
-                const merged = buildMergedGeometry(bricks);
-                if (!merged) return alert('Nothing to export yet.');
-                const mesh = new THREE.Mesh(merged, new THREE.MeshStandardMaterial());
-                const group = new THREE.Group();
-                group.add(mesh);
-                if (kind === 'stl') {
-                    const stl = new STLExporter().parse(group, { binary: false });
-                    download('brickbuilder.stl', stl, 'model/stl');
-                    showToast('STL export complete.');
-                } else {
-                    const obj = new OBJExporter().parse(group);
-                    download('brickbuilder.obj', obj, 'text/plain');
-                    showToast('OBJ export complete.');
-                }
-            };
-
-            const punchAll = () => {
-                const dir = new THREE.Vector3(cameraDirection[0], Math.max(0.15, Math.abs(cameraDirection[1])), cameraDirection[2]).normalize();
-                setPhysics((prev) => {
-                    const next = { ...prev };
-                    bricks.forEach((b) => {
-                        const damage = (next[b.id]?.damage || 0) + 1;
-                        const force = 0.06 + damage * 0.008;
-                        const jitter = new THREE.Vector3((Math.random() - 0.5) * 0.08, Math.random() * 0.07, (Math.random() - 0.5) * 0.08);
-                        const v = dir.clone().multiplyScalar(force).add(jitter);
-                        next[b.id] = {
-                            damage,
-                            vx: v.x,
-                            vy: v.y,
-                            vz: v.z,
-                            offset: next[b.id]?.offset || { x: 0, y: 0, z: 0 },
-                            tilt: next[b.id]?.tilt || { x: 0, y: 0, z: 0 }
-                        };
-                    });
-                    return next;
-                });
-                playImpactSound('metal', soundEnabled, 1.4);
-            };
-
-            const startDrag = (id, startPos) => {
-                setDraggingId(id);
-                setDragPositionState(startPos);
-                setDragValid(true);
-            };
-
-            const setDragPosition = (position, valid) => {
-                setDragPositionState(position);
-                setDragValid(valid);
-            };
-
-            const finishDrag = () => {
-                if (!draggingId) return;
-                const moving = bricks.find((b) => b.id === draggingId);
-                if (!moving || !dragPosition) {
-                    setDraggingId(null);
-                    setDragPositionState(null);
-                    return;
-                }
-                if (!dragValid) {
-                    showToast('Cannot drop block there.');
-                    setDraggingId(null);
-                    setDragPositionState(null);
-                    return;
-                }
-                const candidate = { ...moving, position: dragPosition };
-                const next = bricks.map((b) => b.id === draggingId ? candidate : b);
-                commit(next);
-                playImpactSound('wood', soundEnabled);
-                setDraggingId(null);
-                setDragPositionState(null);
-            };
-
-            const rotateSelected = (direction) => {
-                if (!selectedId) return showToast('Select a block first.');
-                const selected = bricks.find((b) => b.id === selectedId);
-                if (!selected) return;
-                const rotated = { ...selected, rotation: selected.rotation + direction * (Math.PI / 2) };
-                if (collides(bricks, rotated, selectedId)) return showToast('Rotation blocked.');
-                commit(bricks.map((b) => b.id === selectedId ? rotated : b));
-            };
-
-            const deleteSelected = () => {
-                if (!selectedId) return showToast('Select a block first.');
-                commit(bricks.filter((b) => b.id !== selectedId));
-                setSelectedId(null);
-                showToast('Block deleted.');
-            };
-
-            const replaceSelected = () => {
-                if (!selectedId) return showToast('Select a block first.');
-                const selected = bricks.find((b) => b.id === selectedId);
-                if (!selected) return;
-                const replaced = { ...selected, shape: replaceShape };
-                if (collides(bricks, replaced, selectedId)) return showToast('Replacement would overlap.');
-                commit(bricks.map((b) => b.id === selectedId ? replaced : b));
-                showToast(`Replaced with ${getShape(replaceShape).label}.`);
-            };
-
-            const recenterCamera = () => {
-                if (!bricks.length) {
-                    setCameraTarget([0, 0, 0]);
-                    return;
-                }
-                const center = bricks.reduce((acc, b) => [acc[0] + b.position[0], acc[1] + b.position[1], acc[2] + b.position[2]], [0, 0, 0]).map((v) => v / bricks.length);
-                setCameraTarget([center[0], Math.max(0.5, center[1]), center[2]]);
-                showToast('Camera recentered.');
-            };
-
-            useEffect(() => {
-                if (!bricks.length) return setCameraTarget([0, 0, 0]);
-                const center = bricks.reduce((acc, b) => [acc[0] + b.position[0], acc[1] + b.position[1], acc[2] + b.position[2]], [0, 0, 0]).map((v) => v / bricks.length);
-                setCameraTarget([center[0], Math.max(0.5, center[1]), center[2]]);
-            }, [bricks]);
-
-            const app = useMemo(() => ({
-                bricks, hover, setHover, mode, rotation, activeColor, activeMaterial,
-                selectedId, setSelectedId, physics, soundEnabled, setCameraDirection, activeShape,
-                commit, showToast,
-                setScreenshotExporter: (fn) => { screenshotRef.current = fn; }
-            }), [bricks, hover, mode, rotation, activeColor, activeMaterial, selectedId, physics, soundEnabled, activeShape, hoveredId, draggingId, dragPosition, dragValid, previewValid, cameraTarget]);
-
-            return (
-                <div className="w-full h-screen relative overflow-hidden bg-slate-900 text-slate-900">
-                    <Canvas shadows dpr={[1, Math.min(3, window.devicePixelRatio || 2)]} gl={{ preserveDrawingBuffer: true }} camera={{ position: [8, 8, 8], fov: 45 }} onPointerMissed={() => finishDrag()}>
-                        <Scene app={app} />
-                    </Canvas>
-
-                    {showOnboarding && (
-                        <div className="absolute inset-0 bg-slate-900/58 backdrop-blur-[2px] z-40 flex items-center justify-center px-3" onClick={() => setShowOnboarding(false)}>
-                            <div className="max-w-md w-full bg-white rounded-2xl p-4 sm:p-6 text-slate-800 shadow-2xl border border-slate-200">
-                                <h1 className="text-lg sm:text-xl font-bold flex items-center gap-2 mb-3"><span>{Icons.Start()}</span>Start Building</h1>
-                                <div className="grid gap-2 text-sm sm:text-base">
-                                    <p>👆 <b>Tap to place</b> on highlighted grid cells.</p>
-                                    <p>✋ <b>Drag a selected block</b> in Move mode to reposition it live.</p>
-                                    <p>🧭 Pick <b>Build / Move / Delete</b> from the top toolbar.</p>
-                                    <p>🎯 Goal: place <b>{objectiveTarget} bricks</b> to level up.</p>
-                                </div>
-                                <button className={`mt-4 w-full ${MIN_TOUCH} rounded-xl bg-blue-600 text-white font-semibold`} onClick={() => setShowOnboarding(false)}>Start Building</button>
-                            </div>
-                        </div>
-                    )}
-
-                    <div className="absolute top-0 left-0 right-0 z-30 p-2 sm:p-3 pointer-events-none">
-                        <div className="pointer-events-auto rounded-2xl bg-white/90 backdrop-blur-md p-2 sm:p-3 border border-slate-200">
-                            <div className="flex gap-2 items-center overflow-x-auto safe-scroll">
-                                <UIButton label="Build" icon={Icons.Build} tone="primary" active={mode === 'build'} onClick={() => { setMode('build'); setSelectedId(null); }} />
-                                <UIButton label="Move" icon={Icons.Move} tone="primary" active={mode === 'move'} onClick={() => setMode('move')} />
-                                <UIButton label="Delete" icon={Icons.Delete} tone="primary" active={mode === 'delete'} onClick={() => { setMode('delete'); setSelectedId(null); }} />
-                                <UIButton label="Rotate L" icon={Icons.RotateL} onClick={() => mode === 'move' ? rotateSelected(-1) : setRotation((r) => r - Math.PI / 2)} />
-                                <UIButton label="Rotate R" icon={Icons.RotateR} onClick={() => mode === 'move' ? rotateSelected(1) : setRotation((r) => r + Math.PI / 2)} />
-                                <UIButton label="Undo" icon={Icons.Undo} onClick={undo} disabled={historyIndex === 0} />
-                                <UIButton label="Redo" icon={Icons.Redo} onClick={redo} disabled={historyIndex === history.length - 1} />
-                                <UIButton label="Punch All" icon={Icons.Punch} onClick={punchAll} />
-                                <UIButton label="Recenter" icon={Icons.Recenter} onClick={recenterCamera} />
-                            </div>
-                        </div>
-                    </div>
-
-                    <div className="absolute bottom-0 left-0 right-0 z-30 p-2 sm:p-3 pointer-events-none">
-                        <div className="pointer-events-auto rounded-2xl bg-white/92 backdrop-blur-md p-2 sm:p-3 border border-slate-200 flex flex-col gap-2 max-h-[42vh] overflow-y-auto">
-                            <div className="flex gap-2 overflow-x-auto safe-scroll pb-1">
-                                {PALETTE.map((c) => (
-                                    <button key={c} onClick={() => setActiveColor(c)} className={`${MIN_TOUCH} w-11 h-11 rounded-full border-4 ${activeColor === c ? 'border-blue-500' : 'border-white'} shrink-0`} style={{ backgroundColor: c }} />
-                                ))}
-                            </div>
-                            <div className="flex flex-wrap gap-2 items-center text-sm">
-                                <label className="font-semibold">Shape:</label>
-                                {SHAPES.map((shape) => (
-                                    <UIButton
-                                        key={shape.id}
-                                        label={`${shape.icon} ${shape.label}`}
-                                        active={activeShape === shape.id}
-                                        onClick={() => setActiveShape(shape.id)}
-                                    />
-                                ))}
-                            </div>
-                            <div className="flex flex-wrap gap-2 items-center text-sm">
-                                <label className="font-semibold">Material:</label>
-                                {MATERIAL_TYPES.map((m) => (
-                                    <UIButton key={m} label={m} active={activeMaterial === m} onClick={() => setActiveMaterial(m)} />
-                                ))}
-                                <UIButton label={soundEnabled ? 'Sound: On' : 'Sound: Off'} onClick={() => setSoundEnabled((s) => !s)} />
-                                <UIButton label="Save Project" icon={Icons.Save} onClick={saveProject} />
-                                <UIButton label="Reload" icon={Icons.Load} onClick={reloadProject} />
-                                <UIButton label="Export STL" onClick={() => exportMesh('stl')} />
-                                <UIButton label="Export OBJ" onClick={() => exportMesh('obj')} />
-                                <UIButton label="Export Screenshot" icon={Icons.Shot} onClick={() => screenshotRef.current?.()} />
-                            </div>
-                        </div>
-                    </div>
-
-                    <div className="absolute top-[84px] right-3 z-30 pointer-events-none">
-                        <div className="rounded-xl bg-slate-900/82 text-white px-3 py-2 text-xs sm:text-sm shadow-lg border border-slate-700">
-                            <div className="font-semibold">Level {level} Objective</div>
-                            <div>Place {objectiveTarget} bricks ({placedCount}/{objectiveTarget})</div>
-                            <div className="w-40 h-2 mt-1 bg-slate-700 rounded-full overflow-hidden">
-                                <div className="h-full bg-emerald-400 transition-all duration-300" style={{ width: `${(placedCount / objectiveTarget) * 100}%` }} />
-                            </div>
-                        </div>
-                    </div>
-
-                    {toast && (
-                        <div className="absolute left-1/2 -translate-x-1/2 bottom-[26vh] z-40 pointer-events-none">
-                            <div className="bg-black/75 text-white text-sm px-3 py-2 rounded-xl shadow-lg border border-white/10">{toast}</div>
-                        </div>
-                    )}
-                </div>
-            );
-        }
-
-        createRoot(document.getElementById('root')).render(<App />);
-    </script>
+createRoot(document.getElementById('root')).render(<App />);
+</script>
 </body>
 </html>

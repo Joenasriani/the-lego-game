@@ -1,8 +1,8 @@
 # BrickBuilder 3D
 
-Browser-based 3D brick-building application built with React, Three.js and React Three Fiber.
+Browser-based 3D brick-building application built with React, Three.js and React Three Fiber, with experimental WebXR/VR support.
 
-The project implements snap-to-grid brick placement, collision checks, build/move/delete editing modes, rotation, undo/redo history, localStorage scene persistence, STL and OBJ export, high-resolution screenshot export, responsive mouse/touch controls, and procedural interaction effects.
+The project implements snap-to-grid brick placement, collision checks, build/move/delete editing modes, rotation, undo/redo history, localStorage scene persistence, STL and OBJ export, high-resolution screenshot export, responsive mouse/touch controls, procedural interaction effects, and an early WebXR/VR interaction layer that still requires further tuning and refinement.
 
 It runs as a portable single-file browser application using CDN-loaded dependencies.
 

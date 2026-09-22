@@ -1,5 +1,8 @@
 BrickBuilder 3D
 
+**Project relationship:** separate brick-building implementation from Brick XR Builder / Legocraft.  
+**Related project:** https://github.com/Joenasriani/legocraft
+
 
 ## 🚀 Features
 
